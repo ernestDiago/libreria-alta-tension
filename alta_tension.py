@@ -32,28 +32,30 @@ import pandas as pd
 CARPETA_CONDUCTORES = Path(__file__).parent / "caracteristicas_conductores"
 
 
-# ======================================================================
-#  1. MODELOS ELÉCTRICOS DE LÍNEAS
-# ======================================================================
+
+#  MODELOS ELÉCTRICOS DE LÍNEAS
 
 
+@dataclass
 class Modelo:
     """Modelos eléctricos de una línea a partir de las condiciones en la carga.
 
     Unidades de entrada: Pf [MW], Uf [kV], L [km], r y x [Ω/km], g y b [S/km].
     caracter: "inductivo" o "capacitivo".
     """
+    Pf: float      # MW
+    fp: float
+    Uf: float      # kV
+    L: float
+    r: float
+    x: float
+    g: float
+    b: float
+    caracter: str
 
-    def __init__(self, Pf, fp, Uf, L, r, x, g, b, caracter: str):
-        self.Pf = Pf * 10**6
-        self.fp = fp
-        self.Uf = Uf * 10**3
-        self.L = L
-        self.r = r
-        self.x = x
-        self.g = g
-        self.b = b
-        self.caracter = caracter
+    def __post_init__(self):
+        self.Pf = self.Pf * 1e6   # MW -> W
+        self.Uf = self.Uf * 1e3   # kV -> V
 
         # Calculos comunes a todos los modelos
         self._magnitudes_comunes()
@@ -147,9 +149,8 @@ class Modelo:
         )
 
 
-# ======================================================================
-#  2. CÁLCULO MECÁNICO DEL CONDUCTOR (Tema 9)
-# ======================================================================
+
+#  CÁLCULO MECÁNICO DEL CONDUCTOR
 
 PROPIEDADES = {          # (n_al, n_acero): (E [daN/mm²], α [1/°C])
         (6, 1):   (8100, 19.1e-6),
@@ -162,7 +163,7 @@ PROPIEDADES = {          # (n_al, n_acero): (E [daN/mm²], α [1/°C])
 T_VIENTO = {"A": -5,  "B": -10, "C": -15}       # tracción máxima viento (y viento excepcional / desviación cadena)
 T_HIELO  = {"B": -15, "C": -20}                 # tracción máxima hielo (en zona A no hay hielo)
 T_FLECHA_MIN = {"A": -5, "B": -15, "C": -20}    # flecha mínima
-
+DESNIVEL_MINIMO = 1                             #Desnivel entre torres para considerar el calculo con desnivel
 
 @dataclass
 class Conductor:
@@ -195,6 +196,7 @@ class calculoMecanico:
     alt       : float   #Altitid de la linea [m]
     vano      : float   #Longitud del vano [m]
     Vv        : float | None = None   #Velocidad máxima del viento en la zona [km/h] (si > 120/140 -> viento excepcional)
+    desnivel  : float = 0.0 #Desnivel entre vanos
     antivibradores : bool = False     #Si hay antivibradores el EDS sube del 15 % al 22 %
     coef_seguridad : float | None = None  #None -> 3 en media tensión (15-20 kV), 2,5 en el resto
     chs       : float | None = 0.20   #Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
@@ -215,6 +217,11 @@ class calculoMecanico:
             self.coef = 3 if 15 <= self.Un <= 20 else 2.5
         else:
             self.coef = self.coef_seguridad
+
+        #Desnivel
+        self.vano_real  = math.sqrt(self.vano ** 2 + self.desnivel ** 2)
+        self.con_desnivel = abs(self.desnivel) >= DESNIVEL_MINIMO
+
 
     #  SOBRECARGAS
 
@@ -280,12 +287,14 @@ class calculoMecanico:
 
     def _T0_desde_Tmax(self, Tmax, p_t):
         "T0 [daN] tal que T0 + a²p²/(8·T0) = Tmax (despejado de Tmax = T0 + p·f)"
-        a = self.vano
-        return (2 * Tmax + (4 * Tmax**2 - 2 * a**2 * p_t**2) ** 0.5) / 4
+        b = self.vano_real
+        deslvl = abs(self.desnivel)
+        return 1/4 * ((2 * Tmax - p_t * deslvl) + math.sqrt((p_t  * deslvl - 2 * Tmax)**2 - 2 * ( b * p_t )**2))
+
 
     def _Tmax(self, T0, p_t):
         "Tensión máxima en los apoyos [daN]: Tmax = T0 + p·f"
-        return T0 + p_t * self._flecha(T0, p_t)
+        return T0 + p_t * (self._flecha(T0, p_t) + abs(self.desnivel)/2)
 
     def _flecha_exacta(self, T, p_t):
         "Flecha [m] con la catenaria exacta. T [daN], p_t [daN/m]"
@@ -294,7 +303,7 @@ class calculoMecanico:
 
     def _flecha_aprox(self, T, p_t):
         "Flecha aproximada si a<500m e inclinacion menor del 10%"
-        return self.vano**2 * p_t / (8 * T)
+        return self.vano_real**2 * p_t / (8 * T)
 
     def _flecha(self, T, p_t):
         if self.vano > 500: return self._flecha_exacta(T, p_t)
@@ -311,11 +320,11 @@ class calculoMecanico:
         t_v = T_VIENTO[self.Zona]
 
         lista = [
-            ("EDS",    15,  self.conductor.p,             eds * R,        False),
+            ("EDS",    15,  self.conductor.p,             eds * R,        self.con_desnivel),
             ("viento", t_v, self._p_viento(self.v_ref),   R / self.coef,  True),
         ]
         if self.chs is not None:
-            lista.append(("CHS", -5, self.conductor.p, self.chs * R, False))
+            lista.append(("CHS", -5, self.conductor.p, self.chs * R, self.con_desnivel))
         if self.v_excepcional is not None:
             lista.append(("viento excepcional", t_v, self._p_viento(self.v_excepcional), R / self.coef, True))
         if self.Zona in T_HIELO:
@@ -372,7 +381,7 @@ class calculoMecanico:
         return partida
 
     def resolver(self):
-        "Calcula todas las hipótesis. Devuelve un DataFrame con T0, Tmax, % rotura y flecha"
+        "Calcula todas las hipótesis. Devuelve un DataFrame con T0, Tmax, % rotura (con T0 y con Tmax) y flecha"
         nombre1, theta1, p1, T1 = self._hipotesis_dominante()
         self.dominante = nombre1
         R = self.conductor.rotura
@@ -380,16 +389,19 @@ class calculoMecanico:
         filas = []
         for nombre, theta, p_t, T_lim, sobre_Tmax in self._hipotesis_limitantes():
             T0 = self._cambio_condiciones(T1, theta1, p1, theta, p_t)
-            filas.append([nombre, theta, p_t, T0, self._Tmax(T0, p_t), 100 * T0 / R,
+            Tmax = self._Tmax(T0, p_t)
+            filas.append([nombre, theta, p_t, T0, Tmax, 100 * T0 / R, 100 * Tmax / R,
                           self._flecha(T0, p_t), 100 * T_lim / R])
         for nombre, theta, p_t in self._hipotesis_resultado():
             T0 = self._cambio_condiciones(T1, theta1, p1, theta, p_t)
-            filas.append([nombre, theta, p_t, T0, self._Tmax(T0, p_t), 100 * T0 / R,
+            Tmax = self._Tmax(T0, p_t)
+            filas.append([nombre, theta, p_t, T0, Tmax, 100 * T0 / R, 100 * Tmax / R,
                           self._flecha(T0, p_t), None])
 
         self.resultados = pd.DataFrame(
             filas,
-            columns=["hipotesis", "temp_C", "p_t_daN_m", "T0_daN", "Tmax_daN", "%_rotura", "flecha_m", "limite_%"],
+            columns=["hipotesis", "temp_C", "p_t_daN_m", "T0_daN", "Tmax_daN", "%_rotura", "%_rotura_TB",
+                     "flecha_m", "limite_%"],
         ).set_index("hipotesis")
         return self.resultados
 
@@ -412,9 +424,9 @@ class calculoMecanico:
         nombres = [n for n in self.resultados.index if n.startswith("flecha") and n != "flecha mínima"]
         return self.resultados.loc[nombres, "flecha_m"].max()
 
-    # ------------------------------------------------------------------
+
     #  EXPORTAR
-    # ------------------------------------------------------------------
+
 
     def exportar_excel(self, ruta="calculo_mecanico.xlsx", temperaturas=range(0, 50, 5)):
         "Guarda en un Excel los datos de entrada, la tabla de hipótesis y la tabla de tendido"
@@ -445,9 +457,13 @@ class calculoMecanico:
             ["Flecha máxima", round(self.flecha_maxima, 2), "m"],
         ], columns=["Dato", "Valor", "Unidad"])
 
-        resultados.columns = ["Hipótesis", "Temperatura (ºC)", "p_t (daN/m)", "T0 (daN)",
-                              "Tmax (daN)", "% rotura", "Flecha (m)", "Límite (% rotura)"]
-        tendido.columns = ["Temperatura (ºC)", "T (daN)", "Flecha (m)"]
+        # Renombrar por nombre (no por posición) para que no se rompa al añadir columnas
+        resultados = resultados.rename(columns={
+            "hipotesis": "Hipótesis", "temp_C": "Temperatura (ºC)", "p_t_daN_m": "p_t (daN/m)",
+            "T0_daN": "T0 (daN)", "Tmax_daN": "Tmax (daN)", "%_rotura": "% rotura (T0)",
+            "%_rotura_TB": "% rotura (Tmax)", "flecha_m": "Flecha (m)", "limite_%": "Límite (% rotura)",
+        })
+        tendido = tendido.rename(columns={"temp_C": "Temperatura (ºC)", "T_daN": "T (daN)", "flecha_m": "Flecha (m)"})
 
         cabecera = PatternFill("solid", fgColor="1F4E79")
         with pd.ExcelWriter(ruta, engine="openpyxl") as xl:

@@ -132,16 +132,13 @@ def test_parabola_en_vanos_cortos_y_catenaria_en_largos():
 
 # %% Propiedades que se cumplen en todos los escenarios
 
-LIMITE_SOBRE_T0 = {"EDS", "CHS"}   # en el resto el límite se aplica a Tmax
-
-
 def _porcentaje_usado(calc, resultados):
-    "Porcentaje de rotura que usa cada hipótesis limitante, comparable con limite_%"
-    limitantes = resultados.dropna(subset=["limite_%"])
-    R = calc.conductor.rotura
+    """Porcentaje de rotura que usa cada hipótesis limitante, comparable con limite_%.
+    Según la hipótesis, el límite se aplica a T0 (%_rotura) o a Tmax (%_rotura_TB)."""
+    sobre_Tmax = {nombre: s for nombre, _, _, _, s in calc._hipotesis_limitantes()}
     return {
-        nombre: fila["%_rotura"] if nombre in LIMITE_SOBRE_T0 else 100 * fila["Tmax_daN"] / R
-        for nombre, fila in limitantes.iterrows()
+        nombre: resultados.loc[nombre, "%_rotura_TB" if sobre_Tmax[nombre] else "%_rotura"]
+        for nombre in sobre_Tmax
     }
 
 
@@ -159,6 +156,14 @@ def test_la_hipotesis_dominante_esta_en_su_limite(caso):
     assert usado == pytest.approx(resultados.loc[calc.dominante, "limite_%"])
 
 
+def test_porcentaje_de_rotura_con_Tmax(caso):
+    calc = crear_calculo(caso)
+    resultados = calc.resolver()
+    R = calc.conductor.rotura
+    assert resultados["%_rotura_TB"].to_numpy() == pytest.approx(100 * resultados["Tmax_daN"].to_numpy() / R)
+    assert (resultados["%_rotura_TB"] >= resultados["%_rotura"]).all()   # en los apoyos la tensión es mayor
+
+
 def test_tabla_de_tendido(caso):
     tendido = crear_calculo(caso).tabla_tendido()
     assert tendido.T_daN.is_monotonic_decreasing       # con calor el cable se destensa
@@ -168,6 +173,22 @@ def test_tabla_de_tendido(caso):
 def test_flecha_maxima_supera_a_la_de_tendido(caso):
     calc = crear_calculo(caso)
     assert calc.flecha_maxima >= calc.tabla_tendido().flecha_m.max()
+
+
+# %% Exportar a Excel
+
+
+def test_exportar_excel(tmp_path):
+    calc = crear_calculo("zonaB_MT_LA56")
+    ruta = calc.exportar_excel(tmp_path / "calculo.xlsx")
+    hojas = pd.read_excel(ruta, sheet_name=None)
+    assert list(hojas) == ["Datos", "Hipótesis", "Tabla de tendido"]
+    assert list(hojas["Hipótesis"].columns) == [
+        "Hipótesis", "Temperatura (ºC)", "p_t (daN/m)", "T0 (daN)", "Tmax (daN)",
+        "% rotura (T0)", "% rotura (Tmax)", "Flecha (m)", "Límite (% rotura)",
+    ]
+    assert len(hojas["Hipótesis"]) == len(calc.resolver())
+    assert len(hojas["Tabla de tendido"]) == len(calc.tabla_tendido())
 
 
 # %% Regresión: los resultados no deben cambiar sin querer

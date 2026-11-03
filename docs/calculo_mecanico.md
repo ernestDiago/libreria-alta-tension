@@ -11,8 +11,9 @@ Este documento explica qué calcula la clase `calculoMecanico` y por qué, sigui
 5. [Ecuación de cambio de condiciones](#5-ecuación-de-cambio-de-condiciones)
 6. [Hipótesis de cálculo del RLAT](#6-hipótesis-de-cálculo-del-rlat)
 7. [Algoritmo: búsqueda de la hipótesis dominante](#7-algoritmo-búsqueda-de-la-hipótesis-dominante)
-8. [Correspondencia con el código](#8-correspondencia-con-el-código)
-9. [Validación](#9-validación)
+8. [Vano a desnivel](#8-vano-a-desnivel)
+9. [Correspondencia con el código](#9-correspondencia-con-el-código)
+10. [Validación](#10-validación)
 
 ---
 
@@ -145,23 +146,67 @@ El ratio se compara en proporción y no en daN, porque cada hipótesis tiene un 
 
 **En el código:** `_hipotesis_limitantes`, `_estado_inicial`, `_ratio`, `_hipotesis_dominante` y `resolver`.
 
-## 8. Correspondencia con el código
+## 8. Vano a desnivel
+
+Cuando los dos apoyos están a distinta altura, se distinguen dos longitudes:
+
+| Símbolo | Significado |
+|---|---|
+| *a* | Vano **proyectado**: distancia horizontal entre apoyos (parámetro `vano`) |
+| *d* | **Desnivel** entre apoyos (parámetro `desnivel`) |
+| *b* | Vano **real**: $b = \sqrt{a^2 + d^2}$ (atributo `vano_real`) |
+
+### 8.1 Tensión en el punto medio
+
+En vanos desnivelados se trabaja con la tensión en el **punto medio del vano**, $T_m$, en lugar de con la componente horizontal $T_0$. En ese punto el cable va paralelo a la cuerda que une los apoyos, así que $T_m = T_0 \cdot b/a$. Con *d* = 0, *b* = *a* y $T_m = T_0$.
+
+El vano desnivelado se calcula como un vano a nivel de longitud *b* con la tensión $T_m$:
+
+| Magnitud | Fórmula | Con *d* = 0 |
+|---|---|---|
+| Flecha | $f = \dfrac{b^2 p}{8 T_m}$ | $\dfrac{a^2 p}{8 T_0}$ |
+| Tensión en el apoyo alto (punto B) | $T_B = T_m + p\left(f + \dfrac{\lvert d\rvert}{2}\right)$ | $T_0 + p f$ |
+| $T_m$ a partir de $T_B$ | $T_m = \dfrac{1}{4}\left[(2T_B - p\lvert d\rvert) + \sqrt{(p\lvert d\rvert - 2T_B)^2 - 2b^2p^2}\right]$ | $\dfrac{2T_{max} + \sqrt{4T_{max}^2 - 2a^2p^2}}{4}$ |
+
+El apoyo alto está una altura $f + d/2$ por encima del cable en el punto medio. Por eso $T_B$ es la tensión máxima del vano, y es donde se comprueba el límite del reglamento. El signo de *d* no influye: el resultado es el mismo esté el apoyo alto a un lado o al otro.
+
+La última fórmula sale de despejar $T_m$ en la de $T_B$, que es una ecuación de segundo grado.
+
+### 8.2 Ecuación de cambio de condiciones
+
+Se usa la misma ecuación del apartado 5 escrita con $t = T_m / S$, y **con el vano proyectado *a*** en $K$ y $B$, como en la asignatura.
+
+Es una aproximación. La versión exacta usaría *b* con $T_m$ (o *a* con $T_0$ y $E\cos\varphi$, siendo $\cos\varphi = a/b$). La diferencia en el término *B* es $(b/a)^2$: un 1 % con un desnivel del 10 %, y un 9 % con uno del 30 %. En el ejercicio de clase (*d*/*a* = 32 %) cambia $T_m$ hasta 6 daN en las hipótesis que no mandan.
+
+### 8.3 EDS y CHS con desnivel
+
+En un vano desnivelado, el profesor comprueba también el EDS con $T_B$ (*«al ser el vano muy desnivelado, la condición se debe aplicar en el punto más elevado»*). Por eso, con desnivel, el EDS y el CHS pasan a comprobarse con $T_B$, como el viento y el hielo.
+
+Para que un desnivel minúsculo no cambie el criterio de golpe, esto solo se aplica a partir de **`DESNIVEL_MINIMO` = 1 m** (atributo `con_desnivel`). Por debajo, el EDS y el CHS se comprueban con $T_m$, como en un vano a nivel. Las fórmulas de 8.1 sí usan siempre el desnivel real, porque varían de forma continua y no producen saltos.
+
+### 8.4 Limitación
+
+La flecha con la catenaria (vanos de más de 500 m) todavía usa el vano proyectado y no tiene en cuenta el desnivel.
+
+## 9. Correspondencia con el código
 
 | Método | Qué hace |
 |---|---|
 | `Conductor.__post_init__` | Lee el CSV y obtiene p, d, S, rotura, E y α |
-| `calculoMecanico.__post_init__` | Calcula zona, categoría, viento de referencia y excepcional, y coeficiente de seguridad |
+| `calculoMecanico.__post_init__` | Calcula zona, categoría, viento de referencia y excepcional, coeficiente de seguridad, `vano_real` y `con_desnivel` |
 | `_q`, `_pv`, `_p_viento`, `_p_viento_mitad`, `_p_hielo`, `_sobrecarga_conjunta` | Sobrecargas (apartado 4) |
-| `_cambio_condiciones` | Ecuación de cambio de condiciones (apartado 5) |
-| `_T0_desde_Tmax`, `_Tmax` | Conversión entre T₀ y T_max (apartado 2) |
-| `_flecha`, `_flecha_aprox`, `_flecha_exacta` | Flecha (apartado 2) |
-| `_hipotesis_limitantes`, `_hipotesis_resultado` | Listas de hipótesis según zona y categoría (apartado 6) |
+| `_cambio_condiciones` | Ecuación de cambio de condiciones (apartados 5 y 8.2) |
+| `_T0_desde_Tmax`, `_Tmax` | Conversión entre T₀ (o $T_m$) y T_max (o $T_B$) (apartados 2 y 8.1) |
+| `_flecha`, `_flecha_aprox`, `_flecha_exacta` | Flecha (apartados 2 y 8.1) |
+| `_hipotesis_limitantes`, `_hipotesis_resultado` | Listas de hipótesis según zona y categoría (apartados 6 y 8.3) |
 | `_hipotesis_dominante` | Algoritmo del apartado 7 |
 | `resolver` | Tabla con todas las hipótesis |
 | `tabla_tendido` | Tabla de tendido |
 | `flecha_maxima` | Mayor flecha de las hipótesis de flecha máxima |
 
-## 9. Validación
+## 10. Validación
+
+### Vano a nivel
 
 El apartado 2 de [`ejemplos.py`](../ejemplos.py) reproduce el ejemplo de clase *«Cálculo mecánico de un vano a nivel»*: 20 kV, LA-56, 600 m de altitud, vano de 170 m, viento máximo de 130 km/h, E = 7949 daN/mm² y α = 19,1·10⁻⁶ ºC⁻¹.
 
@@ -179,3 +224,16 @@ El apartado 2 de [`ejemplos.py`](../ejemplos.py) reproduce el ejemplo de clase *
 | Desviación de cadena | 281,2 / 4,35 | 280,37 / 4,36 |
 
 Las diferencias, de menos de 1 daN, se deben al redondeo de t₂ a dos decimales en el ejemplo.
+
+### Vano a desnivel
+
+Ejercicio de clase *«Cálculo mecánico de vano desnivelado»*: 20 kV, LA-78, 400 m de altitud (zona A), *a* = 220 m, *d* = 70 m, E = 7949 daN/mm² y α = 19,1·10⁻⁶ ºC⁻¹. El ejercicio solo resuelve el estado inicial:
+
+| Magnitud | Ejercicio | Código |
+|---|---|---|
+| Vano real *b* | 230,87 m | 230,87 m |
+| $T_m$ con $T_B$ = 771 daN y *p* = 0,73 daN/m | 740,66 daN | 740,66 daN |
+| Hipótesis dominante | viento | viento |
+| Flecha en la hipótesis de viento | 6,51 m | 6,56 m |
+
+La flecha del ejercicio tiene una errata: usa $T_m$ = 747 daN en lugar del 740,66 calculado en la línea anterior. Con 740,66 daN sale 6,57 m. El código da 6,56 m porque usa el peso exacto del conductor (0,2666 daN/m) en lugar del redondeado (0,267).
