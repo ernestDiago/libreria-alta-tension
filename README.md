@@ -199,6 +199,26 @@ Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dat
 - **Cálculo mecánico:** vanos **a nivel** (sin desnivel), un único vano o vano de regulación por cálculo, y sin deformación plástica (fluencia) del conductor. La aproximación parabólica es válida para vanos de menos de 500 m y desnivel menor del 10 %. En vanos mayores, la flecha se calcula con la catenaria, pero la ecuación de cambio de condiciones sigue siendo la parabólica.
 - **Modelos eléctricos:** línea trifásica equilibrada, con datos conocidos en el extremo de la carga.
 
+## Tests
+
+```bash
+pip install pytest
+pytest
+```
+
+| Archivo | Qué comprueba |
+|---|---|
+| `tests/test_modelos_electricos.py` | Los cuatro modelos frente a la hoja de cálculo, el comportamiento físico con susceptancia y el carácter de la carga |
+| `tests/test_conductores.py` | Que los CSV cuadran con las fórmulas del tema (detecta números mal copiados) y la clase `Conductor` |
+| `tests/test_calculo_mecanico.py` | Zona, categoría y coeficiente de seguridad; los ejemplos 1, 2 y 3 del Tema 9; el ejemplo de clase de vano a nivel; que ninguna hipótesis supere su límite; y una **regresión** con cuatro escenarios (zonas A, B y C, categoría especial y vano con catenaria) |
+| `tests/test_desnivel.py` | Cómo debe comportarse el vano a desnivel. **Pendiente de implementar**: sus tests aparecen como `xfail` (fallo esperado) |
+
+Los tests de regresión comparan con las tablas de `tests/referencias/`. Si cambias el cálculo **a propósito** y has comprobado que el resultado nuevo es el correcto, regenéralas con:
+
+```bash
+python tests/generar_referencias.py
+```
+
 ## Estructura
 
 ```
@@ -207,6 +227,8 @@ libreria-alta-tension/
 ├── ejemplos.py                   # ejemplos de uso
 ├── caracteristicas_conductores/  # tablas de conductores (CSV)
 ├── docs/                         # explicación de los cálculos
+├── tests/                        # tests (pytest)
+├── pyproject.toml                # configuración de pytest
 ├── requirements.txt
 └── README.md
 ```
