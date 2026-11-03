@@ -19,7 +19,7 @@ def ejercicio():
     return at.calculoMecanico(cable, Un=20, alt=400, vano=220, desnivel=70)
 
 
-# %% Comportamiento general
+# --- Comportamiento general
 
 
 def test_por_defecto_el_vano_esta_a_nivel():
@@ -65,7 +65,7 @@ def test_con_desnivel_aumenta_la_tension_en_el_apoyo_alto():
     assert con_desnivel._Tmax(300, p) > a_nivel._Tmax(300, p)
 
 
-# %% Ejercicio de clase "Cálculo mecánico de vano desnivelado"
+# --- Ejercicio de clase "Cálculo mecánico de vano desnivelado"
 
 
 def test_ejercicio_vano_real(ejercicio):

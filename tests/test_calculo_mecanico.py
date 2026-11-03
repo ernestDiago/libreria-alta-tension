@@ -6,7 +6,7 @@ from conftest import CARPETA_REFERENCIAS, crear_calculo
 
 import alta_tension as at
 
-# %% Datos derivados de la línea
+# --- Datos derivados de la línea
 
 
 @pytest.mark.parametrize(
@@ -38,7 +38,7 @@ def test_viento_excepcional(Un, Vv, excepcional):
     assert crear_calculo("zonaA_LA110", Un=Un, Vv=Vv).v_excepcional == excepcional
 
 
-# %% Ejemplos resueltos del Tema 9
+# --- Ejemplos resueltos del Tema 9
 
 
 def test_tema9_ejemplo1_flecha():
@@ -65,7 +65,7 @@ def test_tema9_ejemplo3_sobrecargas():
     assert calc._p_viento(160) == pytest.approx(1.234, abs=0.001)
 
 
-# %% Ejemplo de clase "Cálculo mecánico de un vano a nivel"
+# --- Ejemplo de clase "Cálculo mecánico de un vano a nivel"
 
 # Hipótesis: (T0 [daN], flecha [m]) del ejemplo resuelto en clase
 EJEMPLO_CLASE = {
@@ -92,7 +92,7 @@ def test_ejemplo_de_clase():
         assert resultados.loc[hipotesis, "flecha_m"] == pytest.approx(flecha, abs=0.05), hipotesis
 
 
-# %% Ecuaciones
+# --- Ecuaciones
 
 
 def test_cambio_de_condiciones_ida_y_vuelta():
@@ -130,7 +130,7 @@ def test_parabola_en_vanos_cortos_y_catenaria_en_largos():
     assert largo._flecha_exacta(1000, p) > largo._flecha_aprox(1000, p)
 
 
-# %% Propiedades que se cumplen en todos los escenarios
+# --- Propiedades que se cumplen en todos los escenarios
 
 def _porcentaje_usado(calc, resultados):
     """Porcentaje de rotura que usa cada hipótesis limitante, comparable con limite_%.
@@ -175,7 +175,7 @@ def test_flecha_maxima_supera_a_la_de_tendido(caso):
     assert calc.flecha_maxima >= calc.tabla_tendido().flecha_m.max()
 
 
-# %% Exportar a Excel
+# --- Exportar a Excel
 
 
 def test_exportar_excel(tmp_path):
@@ -191,7 +191,7 @@ def test_exportar_excel(tmp_path):
     assert len(hojas["Tabla de tendido"]) == len(calc.tabla_tendido())
 
 
-# %% Regresión: los resultados no deben cambiar sin querer
+# --- Regresión: los resultados no deben cambiar sin querer
 # Si un cambio es intencionado, regenera las referencias con: python tests/generar_referencias.py
 
 

@@ -9,7 +9,7 @@ import alta_tension as at
 LA = pd.read_csv(at.CARPETA_CONDUCTORES / "conductores_AL1_ST1A.csv", index_col="codigo_antiguo")
 
 
-# %% Coherencia de las tablas (detecta números mal copiados del tema)
+# --- Coherencia de las tablas (detecta números mal copiados del tema)
 
 
 def test_seccion_total_es_aluminio_mas_acero():
@@ -49,7 +49,7 @@ def test_tablas_homogeneas_completas(archivo):
     assert not tabla.isna().any().any()
 
 
-# %% Clase Conductor
+# --- Clase Conductor
 
 
 def test_datos_del_LA56():

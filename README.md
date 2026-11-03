@@ -118,7 +118,7 @@ flecha mínima                -5       0.27  332.19    342.94     14.37        1
 desviación cadena            -5       0.43  491.32    508.94     21.25        22.01      5.85       NaN
 ```
 
-El archivo [`ejemplos.py`](ejemplos.py) resuelve los ejemplos de modelos eléctricos y de vano a nivel. Se puede ejecutar entero o celda a celda (`# %%`):
+El archivo [`ejemplos.py`](ejemplos.py) resuelve estos tres ejemplos completos, cada uno en su propia función:
 
 ```bash
 python ejemplos.py

@@ -35,7 +35,7 @@ def linea_con_b():
     return at.Modelo(**{**DATOS_EXCEL, "b": 2.7e-6})
 
 
-# %% Comparación con la hoja de cálculo
+# --- Comparación con la hoja de cálculo
 
 
 @pytest.mark.parametrize("modelo", MODELOS)
@@ -52,7 +52,7 @@ def test_magnitudes_comunes(linea_excel):
     assert linea_excel.Vf == pytest.approx(230940.1077)
 
 
-# %% Comportamiento físico con susceptancia
+# --- Comportamiento físico con susceptancia
 
 
 def test_inductivo_ignora_la_capacidad(linea_excel, linea_con_b):
@@ -70,7 +70,7 @@ def test_distribuidos_queda_entre_T_y_pi(linea_con_b, magnitud):
     assert min(t, pi) <= linea_con_b.distribuidos()[magnitud] <= max(t, pi)
 
 
-# %% Carácter de la carga
+# --- Carácter de la carga
 
 
 @pytest.mark.parametrize("caracter", ["inductivo", "Inductiva", "INDUCTIVO"])
@@ -94,7 +94,7 @@ def test_caracter_no_valido_da_error():
         at.Modelo(**{**DATOS_EXCEL, "caracter": "resistiva"})
 
 
-# %% comparar()
+# --- comparar()
 
 
 def test_comparar_reune_los_cuatro_modelos(linea_con_b):
