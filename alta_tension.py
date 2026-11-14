@@ -629,6 +629,29 @@ class calculoMecanico:
 TIPOS_APOYO = ("principio de línea", "fin de línea", "suspensión", "amarre", "anclaje")
 TIPOS_SIN_ANGULO = ("principio de línea", "fin de línea")
 
+# Cadenas de aisladores por fase: una en suspensión y en los extremos, dos (una a cada lado) en amarre
+CADENAS_POR_FASE = {"principio de línea": 1, "fin de línea": 1, "suspensión": 1, "amarre": 2, "anclaje": 2}
+
+# 3ª hipótesis: desequilibrio de tracciones en tanto por uno (Un <= 66 kV, Un > 66 kV). ITC-LAT-07 3.1.4
+DESEQUILIBRIO = {"suspensión": (0.08, 0.15), "amarre": (0.15, 0.25), "anclaje": (0.50, 0.50)}
+
+# 4ª hipótesis: tensión del conductor roto que llega al apoyo (un conductor por fase). ITC-LAT-07 3.1.5
+ROTURA = {"suspensión": 0.50, "amarre": 1.0, "anclaje": 1.0, "principio de línea": 1.0, "fin de línea": 1.0}
+
+# Formas constructivas: celosía (UNE 207017) y chapa (UNE 207018)
+FORMAS_APOYO = ("celosía", "chapa")
+
+# Columnas de la tabla de esfuerzos, como en los resúmenes de clase
+NOMBRES_HIPOTESIS = ("1ª viento", "2ª hielo", "3ª desequilibrio", "4ª rotura")
+
+
+def factor_reduccion_chapa(b: float, c: float, hc: float = 5.0, h0: float = 0.25) -> float:
+    """Factor para llevar los esfuerzos de una cruceta de bóveda al punto donde los da el
+    fabricante en apoyos de chapa (h0 por debajo de la cogolla): (h + hc) / (hc - h0),
+    con h = (b + 2c) / 3 la altura de la resultante. b y c: cotas de la cruceta [m]"""
+    h = (b + 2 * c) / 3
+    return (h + hc) / (hc - h0)
+
 
 def _normalizar(texto: str) -> str:
     "Minúsculas y sin tildes, para aceptar 'Fin de linea', 'AMARRE', etc."
@@ -673,6 +696,17 @@ class CalculoApoyos:
     chs: float | None = 0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
     eds: float | None = None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 %)
 
+    # Datos de los apoyos para calcular los esfuerzos
+    n_conductores: int = 3  # Nº de conductores (3 en un circuito simplex)
+    peso_cadena_amarre: float | None = None  # Peso de una cadena de amarre con sus herrajes [daN]
+    peso_cadena_suspension: float | None = None  # Ídem de suspensión [daN]. None -> igual que la de amarre
+    peso_cruceta: float | None = None  # Peso de la cruceta [daN]
+    peso_cruceta_suspension: float | None = None  # Ídem en los de suspensión [daN]. None -> igual
+    brazo_cruceta: float | None = None  # Distancia del conductor exterior al eje del apoyo [m]
+    formas: str | list[str] = "celosía"  # Forma constructiva: una para todos o una por apoyo
+    factor_chapa: float = 1.0  # Reducción de T y L en los de chapa, ver factor_reduccion_chapa()
+    rotura: bool | None = None  # 4ª hipótesis: None -> según ITC-LAT-07 3.5.3
+
     def __post_init__(self):
         self.n = len(self.tipos)
 
@@ -705,6 +739,17 @@ class CalculoApoyos:
         # Geometría: posición horizontal y cota de cada apoyo, tomando el 1º como origen
         self.posiciones = [float(x) for x in np.cumsum([0, *self.vanos])]
         self.cotas = [float(z) for z in np.cumsum(self.desniveles)]
+
+        # Forma constructiva de cada apoyo
+        if isinstance(self.formas, str):
+            self.formas = [self.formas] * self.n
+        if len(self.formas) != self.n:
+            raise ValueError(f"Hay {self.n} apoyos pero {len(self.formas)} formas constructivas")
+        nombres_formas = {_normalizar(f): f for f in FORMAS_APOYO}
+        for numero, forma in enumerate(self.formas, start=1):
+            if _normalizar(forma) not in nombres_formas:
+                raise ValueError(f"Apoyo {numero}: forma {forma!r} desconocida. Usa una de {FORMAS_APOYO}")
+        self.formas = [nombres_formas[_normalizar(f)] for f in self.formas]
 
         # Tramos ("1-2", "2-3"...) y cantones, cada uno con su cálculo mecánico
         self.tramos = [f"{k}-{k + 1}" for k in range(1, self.n)]
@@ -792,6 +837,194 @@ class CalculoApoyos:
             raise ValueError(f"{columnas} no son hipótesis del cálculo. Usa nombres de {hipotesis}")
 
         return tabla.reindex(self.tramos).rename_axis("tramo")
+
+    #  AUXILIARES PARA LAS HIPÓTESIS
+
+    def _lados(self, numero: int) -> list[tuple[str, float, float, int]]:
+        """Vanos a cada lado del apoyo: (tramo, vano [m], desnivel [m], signo en el gravivano).
+        El desnivel es el del apoyo final del vano respecto al inicial."""
+        lados = []
+        if numero > 1:  # vano anterior: este apoyo es su extremo final
+            lados.append((f"{numero - 1}-{numero}", self.vanos[numero - 2], self.desniveles[numero - 1], 1))
+        if numero < self.n:  # vano siguiente: este apoyo es su extremo inicial
+            lados.append((f"{numero}-{numero + 1}", self.vanos[numero - 1], self.desniveles[numero], -1))
+        return lados
+
+    def _tension(self, tramo: str, hipotesis: str) -> float:
+        "Tensión del conductor del tramo en la hipótesis [daN], de la tabla de tensiones"
+        T = self.tensiones.loc[tramo, hipotesis] if hipotesis in self.tensiones else float("nan")
+        if pd.isna(T):
+            raise ValueError(f"Falta la tensión de {hipotesis} del tramo {tramo}")
+        return float(T)
+
+    def _peso_aparente(self, hipotesis: str) -> float:
+        "Peso del conductor con la sobrecarga de la hipótesis [daN/m], el del gravivano"
+        calc = self.cantones[0].calculo
+        return calc._p_viento() if hipotesis == "viento" else calc._p_hielo()
+
+    def gravivano(self, numero: int, hipotesis: str) -> float:
+        "Longitud de conductor cuyo peso soporta el apoyo [m]: Σ a/2 ± (T/p)·(d/a)"
+        p = self._peso_aparente(hipotesis)
+        return sum(
+            a / 2 + signo * self._tension(tramo, hipotesis) / p * d / a
+            for tramo, a, d, signo in self._lados(numero)
+        )
+
+    def eolovano(self, numero: int) -> float:
+        "Longitud de conductor cuyo viento soporta el apoyo [m]: Σ a/2"
+        return sum(a / 2 for _, a, _, _ in self._lados(numero))
+
+    def _peso_cadenas_y_cruceta(self, numero: int) -> float:
+        "Peso de las cadenas (con herrajes) y de la cruceta del apoyo [daN]"
+        if self.peso_cadena_amarre is None or self.peso_cruceta is None:
+            raise ValueError("Faltan los datos peso_cadena_amarre y peso_cruceta")
+        tipo = self.tipos[numero - 1]
+        cadena, cruceta = self.peso_cadena_amarre, self.peso_cruceta
+        if tipo == "suspensión":
+            if self.peso_cadena_suspension is not None:
+                cadena = self.peso_cadena_suspension
+            if self.peso_cruceta_suspension is not None:
+                cruceta = self.peso_cruceta_suspension
+        return self.n_conductores * CADENAS_POR_FASE[tipo] * cadena + cruceta
+
+    def _hipotesis_base(self) -> str:
+        "Sobrecarga de la 3ª y 4ª hipótesis: hielo en zonas B y C, viento en zona A"
+        return "viento" if self.cantones[0].calculo.Zona == "A" else "hielo"
+
+    #  HIPÓTESIS DE CÁLCULO DE APOYOS (ITC-LAT-07 3.5.3)
+    # Cada una devuelve los esfuerzos del apoyo sin reducir al punto del fabricante [daN, daN·m]:
+    # V vertical, T transversal, L longitudinal y Mt momento torsor. None = no aplica.
+
+    def hipotesis_viento(self, numero: int) -> dict:
+        "1ª hipótesis: viento de 120 km/h (140 en categoría especial)"
+        n, tipo, alfa = self.n_conductores, self.tipos[numero - 1], self.angulos.get(numero)
+        lados = self._lados(numero)
+        pv = self.cantones[0].calculo._pv()  # presión del viento por metro de conductor [daN/m]
+
+        V = n * self.conductor.p * self.gravivano(numero, "viento") + self._peso_cadenas_y_cruceta(numero)
+        T = n * pv * self.eolovano(numero)
+        if alfa:  # resultante de ángulo + viento proyectado en la bisectriz
+            tensiones = sum(self._tension(tramo, "viento") for tramo, *_ in lados)
+            T = n * (
+                tensiones * math.sin(math.radians(alfa / 2))
+                + pv * self.eolovano(numero) * math.cos(math.radians(alfa / 2))
+            )
+        L = n * self._tension(lados[0][0], "viento") if tipo in TIPOS_SIN_ANGULO else None
+        return {"V": V, "T": T, "L": L, "Mt": None}
+
+    def hipotesis_hielo(self, numero: int) -> dict:
+        "2ª hipótesis: hielo (solo zonas B y C)"
+        calc = self.cantones[0].calculo
+        if calc.Zona == "A":
+            raise ValueError("En zona A no hay 2ª hipótesis (hielo)")
+        if calc.categoria == "especial":
+            raise NotImplementedError("Falta la 2ª hipótesis de categoría especial (hielo + viento)")
+
+        n, tipo, alfa = self.n_conductores, self.tipos[numero - 1], self.angulos.get(numero)
+        lados = self._lados(numero)
+
+        V = n * calc._p_hielo() * self.gravivano(numero, "hielo") + self._peso_cadenas_y_cruceta(numero)
+        T = None
+        if alfa:  # resultante de ángulo
+            tensiones = sum(self._tension(tramo, "hielo") for tramo, *_ in lados)
+            T = n * tensiones * math.sin(math.radians(alfa / 2))
+        L = n * self._tension(lados[0][0], "hielo") if tipo in TIPOS_SIN_ANGULO else None
+        return {"V": V, "T": T, "L": L, "Mt": None}
+
+    def hipotesis_desequilibrio(self, numero: int) -> dict:
+        "3ª hipótesis: desequilibrio de tracciones (no se aplica en principio ni fin de línea)"
+        tipo, alfa, n = self.tipos[numero - 1], self.angulos.get(numero), self.n_conductores
+        if tipo in TIPOS_SIN_ANGULO:
+            raise ValueError(f"En los apoyos de {tipo} no hay 3ª hipótesis: el 100 % ya está en la 1ª y la 2ª")
+
+        base = self._hipotesis_base()
+        V = (self.hipotesis_hielo(numero) if base == "hielo" else self.hipotesis_viento(numero))["V"]
+        k = DESEQUILIBRIO[tipo][self.Un > 66]
+        T_max = max(self._tension(tramo, base) for tramo, *_ in self._lados(numero))
+
+        if alfa:  # por un lado T_max y por el otro (1 - k)·T_max
+            T = n * (2 - k) * T_max * math.sin(math.radians(alfa / 2))
+            L = n * k * T_max * math.cos(math.radians(alfa / 2))
+        else:
+            T, L = None, n * k * T_max
+        return {"V": V, "T": T, "L": L, "Mt": None}
+
+    def hipotesis_rotura(self, numero: int) -> dict:
+        """4ª hipótesis: rotura del conductor exterior del vano con más tensión.
+        Produce un momento torsor Mt = T·brazo. La fase rota sostiene la mitad de su vano, como
+        en los ejemplos de clase (en fin de línea, nada)."""
+        if self.brazo_cruceta is None:
+            raise ValueError("Falta el dato brazo_cruceta")
+        tipo, n = self.tipos[numero - 1], self.n_conductores
+        base = self._hipotesis_base()
+        calc = self.cantones[0].calculo
+        p = calc._p_hielo() if base == "hielo" else self.conductor.p  # peso vertical del conductor
+
+        lados = self._lados(numero)
+        tramo_roto, a_roto, *_ = max(lados, key=lambda lado: self._tension(lado[0], base))
+        a_g_fase_rota = a_roto / 2 if len(lados) == 2 else 0
+        V = (
+            (n - 1) * p * self.gravivano(numero, base)
+            + p * a_g_fase_rota
+            + self._peso_cadenas_y_cruceta(numero)
+        )
+        Mt = ROTURA[tipo] * self._tension(tramo_roto, base) * self.brazo_cruceta
+        return {"V": V, "T": None, "L": None, "Mt": Mt}
+
+    #  TABLA DE ESFUERZOS PARA ELEGIR EL APOYO
+
+    def _calcula_rotura(self, numero: int) -> bool:
+        """Si se calcula la 4ª hipótesis. Por defecto (rotura=None), según ITC-LAT-07 3.5.3: se puede
+        omitir en suspensión y amarre si Un <= 66 kV, la carga de rotura del conductor es menor de
+        6600 daN y su coeficiente de seguridad es al menos 3"""
+        if self.rotura is not None:
+            return self.rotura
+        if self.tipos[numero - 1] not in ("suspensión", "amarre"):
+            return True
+        exenta = (
+            self.Un <= 66
+            and self.conductor.rotura < 6600
+            and min(c.calculo.coef for c in self.cantones) >= 3
+        )
+        return not exenta
+
+    def hipotesis_aplicables(self, numero: int) -> list[str]:
+        "Hipótesis que se calculan en el apoyo, según la zona, su tipo y la 4ª hipótesis"
+        hipotesis = ["viento"]
+        if self.cantones[0].calculo.Zona != "A":
+            hipotesis.append("hielo")
+        if self.tipos[numero - 1] not in TIPOS_SIN_ANGULO:
+            hipotesis.append("desequilibrio")
+        if self._calcula_rotura(numero):
+            hipotesis.append("rotura")
+        return hipotesis
+
+    def esfuerzos(self, numero: int) -> pd.DataFrame:
+        """Resumen de esfuerzos del apoyo preparado para buscar en las tablas del fabricante.
+        Celosía (UNE 207017): T y L juntos se suman en un esfuerzo horizontal, que se da como L.
+        Chapa (UNE 207018): T y L se multiplican por factor_chapa (punto de aplicación del fabricante).
+        Columnas: hipótesis; filas: V, T, L [daN] y Mt [daN·m]. NaN = no aplica."""
+        metodos = {
+            "viento": self.hipotesis_viento,
+            "hielo": self.hipotesis_hielo,
+            "desequilibrio": self.hipotesis_desequilibrio,
+            "rotura": self.hipotesis_rotura,
+        }
+        aplicables = self.hipotesis_aplicables(numero)
+        forma = self.formas[numero - 1]
+
+        tabla = {}
+        for nombre, columna in zip(metodos, NOMBRES_HIPOTESIS):
+            esf = metodos[nombre](numero) if nombre in aplicables else {}
+            V, T, L, Mt = (esf.get(e) for e in ("V", "T", "L", "Mt"))
+            if forma == "celosía" and T is not None and L is not None:
+                T, L = None, T + L
+            elif forma == "chapa":
+                T = T * self.factor_chapa if T is not None else None
+                L = L * self.factor_chapa if L is not None else None
+            tabla[columna] = {"V": V, "T": T, "L": L, "Mt": Mt}
+
+        return pd.DataFrame(tabla, index=["V", "T", "L", "Mt"], dtype=float)
 
     #  ESQUEMA
 

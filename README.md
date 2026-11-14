@@ -166,6 +166,43 @@ apoyos.tensiones_calculadas  # False: se están usando las del enunciado
 
 El cable de cada vano se dibuja en el esquema con la parábola de la hipótesis de temperatura máxima de su cantón.
 
+#### Hipótesis de cálculo (ITC-LAT-07 3.5.3)
+
+Necesitan los pesos de cadenas y crucetas y, para la 4ª, el brazo de la cruceta:
+
+```python
+apoyos = at.CalculoApoyos(cable, Un=20, alt=600, ..., tensiones=tensiones,
+                          peso_cadena_amarre=12,        # cadena + herrajes [daN]
+                          peso_cruceta=70,              # [daN]
+                          brazo_cruceta=1.75)           # conductor exterior - eje [m]
+
+apoyos.hipotesis_viento(4)        # {'V': 618.2, 'T': 4642.3, 'L': None, 'Mt': None}
+apoyos.hipotesis_hielo(4)         # 2ª: solo zonas B y C
+apoyos.hipotesis_desequilibrio(4) # 3ª: no existe en principio y fin de línea
+apoyos.hipotesis_rotura(4)        # 4ª: momento torsor Mt
+apoyos.gravivano(4, "hielo"), apoyos.eolovano(4)
+```
+
+Para **elegir el apoyo**, `esfuerzos(numero)` junta las hipótesis que se aplican (`hipotesis_aplicables(numero)`) en la tabla de los resúmenes de clase, ya preparada para buscar en las tablas del fabricante:
+
+```python
+apoyos.esfuerzos(4)
+#     1ª viento  2ª hielo  3ª desequilibrio  4ª rotura
+# V       618.2    1164.4            1164.4        NaN
+# T      4642.3    4848.2               NaN        NaN
+# L         NaN       NaN            5373.9        NaN
+# Mt        NaN       NaN               NaN        NaN
+```
+
+- **Celosía** (UNE 207017, `formas="celosía"`, por defecto): cuando hay T y L, se suman en un único esfuerzo horizontal que se da como L.
+- **Chapa** (UNE 207018): T y L se multiplican por `factor_chapa`, que los lleva al punto donde los da el fabricante. Para una cruceta de bóveda: `factor_chapa=at.factor_reduccion_chapa(b, c)`.
+- `formas` puede ser una para todos o una lista con la de cada apoyo.
+- **4ª hipótesis:** por defecto (`rotura=None`) se omite en suspensión y amarre si Un ≤ 66 kV, la carga de rotura del conductor es menor de 6600 daN y el coeficiente de seguridad es al menos 3 (ITC-LAT-07 3.5.3). Con `rotura=True` o `False` se fuerza.
+
+Validado con los 7 resúmenes de esfuerzos del ejemplo SJR005.
+
+Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de aplicación del fabricante: V vertical, T transversal, L longitudinal [daN] y Mt momento torsor [daN·m]. `None` significa que ese esfuerzo no aplica. Si los de suspensión llevan otras cadenas o crucetas, se indican con `peso_cadena_suspension` y `peso_cruceta_suspension`. Validado con los 7 apoyos del ejemplo SJR005 (39 valores, diferencias menores del 0,2 %).
+
 ---
 
 ## Referencia
