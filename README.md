@@ -145,7 +145,26 @@ apoyos.esquema()                     # o esquema(ruta="esquema.png") para guarda
 
 ![Esquema de la línea](docs/esquema_ejemplo.png)
 
-Tipos admitidos (`TIPOS_APOYO`): `principio de línea`, `fin de línea`, `suspensión`, `amarre` y `anclaje`, con o sin tildes ni mayúsculas. Los de suspensión, amarre y anclaje son de alineación salvo que tengan ángulo. El cable de cada vano se dibuja con la parábola de la hipótesis de temperatura máxima de su propio cálculo mecánico (`calculo_vano(i)`, con la longitud y el desnivel de ese vano).
+Tipos admitidos (`TIPOS_APOYO`): `principio de línea`, `fin de línea`, `suspensión`, `amarre` y `anclaje`, con o sin tildes ni mayúsculas. Los de suspensión, amarre y anclaje son de alineación salvo que tengan ángulo. #### Cantones y tensiones de cada vano
+
+La línea se divide sola en **cantones**: se corta en todos los apoyos que no son de suspensión (amarre, anclaje, principio y fin de línea). Cada cantón se calcula con un `calculoMecanico` propio, con su **vano de regulación** $a_r = \sqrt{\sum a_i^3 / \sum a_i}$ y su **mayor desnivel**, y todos sus vanos comparten esa tensión.
+
+```python
+apoyos.cantones              # [Canton(inicio=1, fin=3, vano_regulacion=155.24, desnivel=0), ...]
+apoyos.calculo_vano(1)       # calculoMecanico del cantón del vano 2-3
+apoyos.tensiones             # T0 (Tm si hay desnivel) de cada vano en cada hipótesis
+```
+
+Si el **enunciado da las tensiones**, se pasan en una tabla con los tramos como filas y los nombres de las hipótesis como columnas, y se usan en lugar de las calculadas. Los tramos que no se den quedan vacíos:
+
+```python
+tensiones = pd.DataFrame({"hielo": [2107, 2107, 2116], "viento": [1747, 1747, 1758]},
+                         index=["2-3", "3-4", "4-5"])
+apoyos = at.CalculoApoyos(cable, Un=20, alt=600, ..., tensiones=tensiones)
+apoyos.tensiones_calculadas  # False: se están usando las del enunciado
+```
+
+El cable de cada vano se dibuja en el esquema con la parábola de la hipótesis de temperatura máxima de su cantón.
 
 ---
 
@@ -268,7 +287,7 @@ pytest
 | `tests/test_modelos_electricos.py` | Los cuatro modelos frente a la hoja de cálculo, el comportamiento físico con susceptancia y el carácter de la carga |
 | `tests/test_conductores.py` | Que los CSV cuadran con las fórmulas del tema (detecta números mal copiados) y la clase `Conductor` |
 | `tests/test_calculo_mecanico.py` | Zona, categoría y coeficiente de seguridad; los límites EDS y CHS del enunciado; los ejemplos 1, 2 y 3 del Tema 9; el ejemplo de clase de vano a nivel; el ejemplo SJR005; que ninguna hipótesis supere su límite; la exportación a Excel; y una **regresión** con cuatro escenarios (zonas A, B y C, categoría especial y vano con catenaria) |
-| `tests/test_apoyos.py` | Datos de la línea de `CalculoApoyos` (tipos, cotas, ángulos), errores al introducirlos mal y el esquema |
+| `tests/test_apoyos.py` | Datos de la línea de `CalculoApoyos` (tipos, cotas, ángulos), errores al introducirlos mal, cantones y tensiones (calculadas con el SJR005 o del enunciado) y el esquema |
 | `tests/test_desnivel.py` | Vano a desnivel: que con `desnivel=0` todo sea idéntico al vano a nivel, que el signo no importe, el umbral `DESNIVEL_MINIMO` y los valores del ejercicio de clase |
 
 Los tests de regresión comparan con las tablas de `tests/referencias/`. Si cambias el cálculo **a propósito** y has comprobado que el resultado nuevo es el correcto, regenéralas con:

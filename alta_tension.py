@@ -637,6 +637,22 @@ def _normalizar(texto: str) -> str:
 
 
 @dataclass
+class Canton:
+    "Tramo entre dos apoyos con cadenas de amarre. Todos sus vanos tienen la misma tensión"
+
+    inicio: int  # Nº del apoyo donde empieza
+    fin: int  # Nº del apoyo donde acaba
+    vano_regulacion: float  # Vano de regulación [m]
+    desnivel: float  # Mayor desnivel de sus vanos [m]
+    calculo: calculoMecanico = field(repr=False)  # Cálculo mecánico del conductor del cantón
+
+    @property
+    def tramos(self) -> list[str]:
+        "Vanos del cantón, p. ej. ['3-4', '4-5']"
+        return [f"{k}-{k + 1}" for k in range(self.inicio, self.fin)]
+
+
+@dataclass
 class CalculoApoyos:
 
     conductor: Conductor        # Propiedades de los conductores
@@ -690,6 +706,17 @@ class CalculoApoyos:
         self.posiciones = [float(x) for x in np.cumsum([0, *self.vanos])]
         self.cotas = [float(z) for z in np.cumsum(self.desniveles)]
 
+        # Tramos ("1-2", "2-3"...) y cantones, cada uno con su cálculo mecánico
+        self.tramos = [f"{k}-{k + 1}" for k in range(1, self.n)]
+        self.cantones = self._cantones()
+
+        # Tensiones de cada vano: las del enunciado si se dan, si no las de su cantón
+        self.tensiones_calculadas = self.tensiones is None
+        if self.tensiones_calculadas:
+            self.tensiones = self._tensiones_de_cantones()
+        else:
+            self.tensiones = self._comprobar_tensiones(self.tensiones)
+
     def funcion(self, numero: int) -> str | None:
         "'alineación' o 'ángulo' (None en principio y fin de línea)"
         if self.tipos[numero - 1] in TIPOS_SIN_ANGULO:
@@ -705,26 +732,72 @@ class CalculoApoyos:
             texto += "\nALINEACIÓN"
         return texto
 
+    #  CANTONES Y TENSIONES
+
+    def _cantones(self) -> list[Canton]:
+        """Divide la línea en cantones, cortando en todos los apoyos que no son de suspensión.
+        Cada cantón se calcula con su vano de regulación y su mayor desnivel."""
+        cortes = [1] + [k for k in range(2, self.n) if self.tipos[k - 1] != "suspensión"] + [self.n]
+
+        cantones = []
+        for inicio, fin in itertools.pairwise(cortes):
+            vanos = self.vanos[inicio - 1 : fin - 1]
+            desniveles = self.desniveles[inicio:fin]  # de cada vano: apoyo final respecto al inicial
+            vano_regulacion = math.sqrt(sum(a**3 for a in vanos) / sum(vanos))
+            desnivel = max(desniveles, key=abs)
+
+            calculo = calculoMecanico(
+                self.conductor,
+                Un=self.Un,
+                alt=self.alt,
+                vano=vano_regulacion,
+                desnivel=desnivel,
+                Vv=self.Vv,
+                antivibradores=self.antivibradores,
+                coef_seguridad=self.coef_seguridad,
+                chs=self.chs,
+                eds=self.eds,
+            )
+            calculo.resolver()  # los resultados quedan guardados en calculo.resultados
+            cantones.append(Canton(inicio, fin, vano_regulacion, desnivel, calculo))
+        return cantones
+
+    def canton_de_vano(self, i: int) -> Canton:
+        "Cantón al que pertenece el vano i (0 = vano 1-2)"
+        return next(c for c in self.cantones if c.inicio <= i + 1 < c.fin)
+
     def calculo_vano(self, i: int) -> calculoMecanico:
-        "Cálculo mecánico del conductor del vano i (0 = vano 1-2), con su longitud y su desnivel"
-        return calculoMecanico(
-            self.conductor,
-            Un=self.Un,
-            alt=self.alt,
-            vano=self.vanos[i],
-            desnivel=self.desniveles[i + 1],  # desnivel del apoyo final del vano respecto al inicial
-            Vv=self.Vv,
-            antivibradores=self.antivibradores,
-            coef_seguridad=self.coef_seguridad,
-            chs=self.chs,
-            eds=self.eds,
-        )
+        "Cálculo mecánico del vano i (0 = vano 1-2): el de su cantón, hecho con el vano de regulación"
+        return self.canton_de_vano(i).calculo
+
+    def _tensiones_de_cantones(self) -> pd.DataFrame:
+        "Tensión T0 (Tm si hay desnivel) [daN] de cada vano en cada hipótesis, la de su cantón"
+        filas = {}
+        for canton in self.cantones:
+            for tramo in canton.tramos:
+                filas[tramo] = canton.calculo.resultados["T0_daN"]
+        return pd.DataFrame(filas).T.rename_axis("tramo")
+
+    def _comprobar_tensiones(self, tabla) -> pd.DataFrame:
+        "Comprueba la tabla del enunciado y la ordena por tramos (los que falten quedan vacíos)"
+        tabla = pd.DataFrame(tabla)
+
+        desconocidos = [t for t in tabla.index if t not in self.tramos]
+        if desconocidos:
+            raise ValueError(f"Los tramos {desconocidos} no existen. Los tramos son {self.tramos}")
+
+        hipotesis = list(self.cantones[0].calculo.resultados.index)
+        columnas = [c for c in tabla.columns if c not in hipotesis]
+        if columnas:
+            raise ValueError(f"{columnas} no son hipótesis del cálculo. Usa nombres de {hipotesis}")
+
+        return tabla.reindex(self.tramos).rename_axis("tramo")
 
     #  ESQUEMA
 
     def _parametro_catenaria(self, i: int) -> float:
         "h = T/p [m] del vano i en la hipótesis de temperatura máxima, para dibujarlo"
-        resultados = self.calculo_vano(i).resolver()
+        resultados = self.calculo_vano(i).resultados
         fila = resultados[resultados.index.str.startswith("flecha temperatura")].iloc[0]
         return fila["T0_daN"] / fila["p_t_daN_m"]
 

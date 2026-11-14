@@ -1,6 +1,7 @@
 """Tests de la clase CalculoApoyos (datos de la línea y esquema)."""
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 import alta_tension as at
@@ -81,6 +82,82 @@ def test_los_datos_de_la_linea_pasan_a_cada_vano(cable):
     calc = apoyos.calculo_vano(1)
     assert calc.limite_eds == 0.165
     assert calc.chs is None
+
+
+# --- Cantones
+
+
+def test_sin_suspensiones_cada_vano_es_un_canton(apoyos):
+    assert [(c.inicio, c.fin) for c in apoyos.cantones] == [(1, 2), (2, 3), (3, 4), (4, 5)]
+    assert [c.vano_regulacion for c in apoyos.cantones] == [210, 270, 270, 240]
+
+
+# Ejemplo SJR005: LA-110, 1200 m, EDS 8,7 %, CHS 15,9 %, con suspensiones en 2, 4 y 6
+SJR005 = {
+    "vanos": [160, 150, 145, 140, 150, 160],
+    "desniveles": [0, 0, 0, 5, 10, -10, 15],
+    "tipos": ["fin de línea", "suspensión", "anclaje", "suspensión", "amarre", "suspensión",
+              "fin de línea"],
+    "angulos": {5: 30},
+}
+
+
+@pytest.fixture(scope="module")
+def apoyos_SJR005():
+    cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
+    return at.CalculoApoyos(cable, Un=20, alt=1200, eds=0.087, chs=0.159, **SJR005)
+
+
+def test_cantones_SJR005(apoyos_SJR005):
+    cantones = apoyos_SJR005.cantones
+    assert [(c.inicio, c.fin) for c in cantones] == [(1, 3), (3, 5), (5, 7)]
+    assert [c.tramos for c in cantones] == [["1-2", "2-3"], ["3-4", "4-5"], ["5-6", "6-7"]]
+    assert [c.vano_regulacion for c in cantones] == pytest.approx([155.2, 142.6, 155.2], abs=0.05)
+    assert [c.desnivel for c in cantones] == [0, 10, 15]   # el mayor de cada cantón
+
+
+def test_los_vanos_de_un_canton_comparten_calculo(apoyos_SJR005):
+    assert apoyos_SJR005.calculo_vano(0) is apoyos_SJR005.calculo_vano(1)
+    assert apoyos_SJR005.calculo_vano(1) is not apoyos_SJR005.calculo_vano(2)
+
+
+def test_tensiones_calculadas_SJR005(apoyos_SJR005):
+    "Tabla de tensiones del PDF: (hielo -20 ºC, viento -15 ºC, viento mitad -15 ºC) [daN]"
+    pdf = {"1-2": (1354, 840, 598), "3-4": (1329, 838, 607), "6-7": (1346, 833, 592)}
+    tensiones = apoyos_SJR005.tensiones
+    assert apoyos_SJR005.tensiones_calculadas
+    assert list(tensiones.index) == ["1-2", "2-3", "3-4", "4-5", "5-6", "6-7"]
+    for tramo, valores in pdf.items():
+        calculado = tensiones.loc[tramo, ["hielo", "viento", "desviación cadena"]]
+        assert list(calculado) == pytest.approx(valores, rel=0.01), tramo
+
+
+# --- Tensiones del enunciado
+
+TENSIONES_ENUNCIADO = pd.DataFrame(
+    {"hielo": [2107, 2107, 2116], "viento": [1747, 1747, 1758]}, index=["2-3", "3-4", "4-5"]
+)
+
+
+def test_tensiones_del_enunciado_tienen_prioridad(cable):
+    apoyos = at.CalculoApoyos(cable, Un=20, alt=600, tensiones=TENSIONES_ENUNCIADO,
+                              **DATOS_EJERCICIO)
+    assert not apoyos.tensiones_calculadas
+    assert list(apoyos.tensiones.index) == ["1-2", "2-3", "3-4", "4-5"]   # ordenada por tramos
+    assert pd.isna(apoyos.tensiones.loc["1-2", "hielo"])                  # el que no se da queda vacío
+    assert apoyos.tensiones.loc["4-5", "viento"] == 1758
+
+
+@pytest.mark.parametrize(
+    "tabla, mensaje",
+    [
+        (pd.DataFrame({"hielo": [2107]}, index=["5-6"]), "no existen"),
+        (pd.DataFrame({"Hielo": [2107]}, index=["2-3"]), "no son hipótesis"),
+    ],
+)
+def test_tensiones_del_enunciado_mal_escritas(cable, tabla, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        at.CalculoApoyos(cable, Un=20, alt=600, tensiones=tabla, **DATOS_EJERCICIO)
 
 
 # --- Esquema
