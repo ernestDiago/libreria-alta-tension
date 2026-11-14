@@ -852,10 +852,13 @@ class CalculoApoyos:
 
     def _tension(self, tramo: str, hipotesis: str) -> float:
         "Tensión del conductor del tramo en la hipótesis [daN], de la tabla de tensiones"
-        T = self.tensiones.loc[tramo, hipotesis] if hipotesis in self.tensiones else float("nan")
-        if pd.isna(T):
+        tabla = self.tensiones  # siempre es un DataFrame tras __post_init__
+        T = math.nan
+        if tabla is not None and hipotesis in tabla.columns:
+            T = float(tabla[hipotesis].to_numpy(dtype=float)[self.tramos.index(tramo)])
+        if math.isnan(T):
             raise ValueError(f"Falta la tensión de {hipotesis} del tramo {tramo}")
-        return float(T)
+        return T
 
     def _peso_aparente(self, hipotesis: str) -> float:
         "Peso del conductor con la sobrecarga de la hipótesis [daN/m], el del gravivano"
