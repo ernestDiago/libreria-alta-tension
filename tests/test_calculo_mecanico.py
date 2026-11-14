@@ -175,6 +175,54 @@ def test_flecha_maxima_supera_a_la_de_tendido(caso):
     assert calc.flecha_maxima >= calc.tabla_tendido().flecha_m.max()
 
 
+# --- Límites del EDS y del CHS del enunciado
+
+
+def test_limite_eds_por_defecto():
+    assert crear_calculo("zonaA_LA110").limite_eds == 0.15
+    assert crear_calculo("zonaA_LA110", antivibradores=True).limite_eds == 0.22
+
+
+def test_limite_eds_del_enunciado_tiene_prioridad():
+    assert crear_calculo("zonaA_LA110", eds=0.087, antivibradores=True).limite_eds == 0.087
+
+
+@pytest.mark.parametrize("limite", ["eds", "chs"])
+def test_limite_en_porcentaje_da_error(limite):
+    with pytest.raises(ValueError, match="tanto por uno"):
+        crear_calculo("zonaA_LA110", **{limite: 15.9})
+
+
+def test_alfa_mal_escrito_da_error():
+    with pytest.raises(ValueError, match="17.8e-6"):
+        at.Conductor("LA 110", alfa_dato=17.8 * 1e6)
+
+
+# Ejemplo SJR005 "Cálculo mecánico de apoyos de una línea aérea de 3ª categoría":
+# 20 kV, LA-110, 1200 m (zona C), EDS 8,7 %, CHS 15,9 %, E = 8047 daN/mm², α = 17,8·10⁻⁶ ºC⁻¹
+# Cantón: (vano de regulación, mayor desnivel del cantón) -> (T hielo -20 ºC, T viento -15 ºC,
+# T viento mitad -15 ºC) [daN]
+SJR005 = {
+    "1-3": ((155.2, 0), (1354, 840, 598)),
+    "3-5": ((142.6, 10), (1329, 838, 607)),
+    "5-7": ((155.2, 15), (1346, 833, 592)),
+}
+
+
+@pytest.mark.parametrize("canton", SJR005)
+def test_ejemplo_SJR005(canton):
+    "El ejemplo redondea p a 0,425 daN/m: diferencias de hasta el 1 %"
+    (vano, desnivel), tensiones = SJR005[canton]
+    cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
+    calc = at.calculoMecanico(
+        cable, Un=20, alt=1200, vano=vano, desnivel=desnivel, eds=0.087, chs=0.159
+    )
+    resultados = calc.resolver()
+    assert calc.dominante == "EDS"
+    for hipotesis, T in zip(["hielo", "viento", "desviación cadena"], tensiones):
+        assert resultados.loc[hipotesis, "T0_daN"] == pytest.approx(T, rel=0.01), hipotesis
+
+
 # --- Exportar a Excel
 
 

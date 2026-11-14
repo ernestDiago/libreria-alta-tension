@@ -6,6 +6,7 @@ Librería en Python con los cálculos de **líneas eléctricas de alta tensión*
 |---|---|---|
 | **Modelos eléctricos** | `Modelo` | Tensión, intensidad, potencia, pérdidas y caída de tensión en el origen de una línea con los modelos **inductivo**, **en T**, **en π** y de **parámetros distribuidos** |
 | **Cálculo mecánico** (Tema 9) | `Conductor`, `calculoMecanico` | Sobrecargas de viento y hielo, **hipótesis del RLAT** (ITC-LAT-07), tracciones, **flechas** y **tabla de tendido**, en vanos **a nivel** y **a desnivel** |
+| **Apoyos** (Tema 9) *(en desarrollo)* | `CalculoApoyos` | Datos de la línea apoyo a apoyo y **esquema** del perfil. El cálculo de esfuerzos está pendiente |
 
 Todo está en un único archivo, [`alta_tension.py`](alta_tension.py).
 
@@ -19,7 +20,7 @@ cd libreria-alta-tension
 pip install -r requirements.txt
 ```
 
-Requisitos: Python ≥ 3.10, `pandas`, `numpy` y `openpyxl` (este último solo para exportar a Excel).
+Requisitos: Python ≥ 3.10, `pandas`, `numpy`, `openpyxl` (solo para exportar a Excel) y `matplotlib` (solo para el esquema de apoyos).
 
 ### Usarla desde otra carpeta
 
@@ -124,6 +125,28 @@ El archivo [`ejemplos.py`](ejemplos.py) resuelve estos tres ejemplos completos, 
 python ejemplos.py
 ```
 
+### Apoyos *(en desarrollo)*
+
+Se describe la línea apoyo a apoyo: el vano entre cada par de apoyos, el desnivel de cada apoyo **respecto al anterior** (el primero, 0), su tipo y, si los hay, los ángulos (por **número de apoyo**, empezando en 1).
+
+```python
+cable = at.Conductor("LA 180", E_dato=8000, alfa_dato=17.8e-6)
+
+apoyos = at.CalculoApoyos(
+    conductor=cable,
+    Un=20, alt=600,                  # y, si hace falta, eds, chs, Vv... como en calculoMecanico
+    vanos=[210, 270, 270, 240],
+    desniveles=[0, 5, -20, 20, 20],
+    tipos=["fin de línea", "amarre", "anclaje", "amarre", "fin de línea"],
+    angulos={4: 45},                 # el apoyo 4 es de ángulo, 45º
+)
+apoyos.esquema()                     # o esquema(ruta="esquema.png") para guardarlo
+```
+
+![Esquema de la línea](docs/esquema_ejemplo.png)
+
+Tipos admitidos (`TIPOS_APOYO`): `principio de línea`, `fin de línea`, `suspensión`, `amarre` y `anclaje`, con o sin tildes ni mayúsculas. Los de suspensión, amarre y anclaje son de alineación salvo que tengan ángulo. El cable de cada vano se dibuja con la parábola de la hipótesis de temperatura máxima de su propio cálculo mecánico (`calculo_vano(i)`, con la longitud y el desnivel de ese vano).
+
 ---
 
 ## Referencia
@@ -170,7 +193,10 @@ python ejemplos.py
 | `desnivel` | `float` | `0.0` | Diferencia de altura *d* entre los dos apoyos del vano [m]. `0` → vano a nivel |
 | `antivibradores` | `bool` | `False` | Si es `True`, el límite del EDS sube del 15 % al 22 % |
 | `coef_seguridad` | `float \| None` | `None` | Coeficiente de seguridad a rotura. `None` → 3 en media tensión (15–20 kV) y 2,5 en el resto |
-| `chs` | `float \| None` | `0.20` | Límite CHS a −5 ºC (fracción de la rotura). `None` → no se comprueba |
+| `chs` | `float \| None` | `0.20` | Límite CHS a −5 ºC, **en tanto por uno** (15,9 % → `0.159`). `None` → no se comprueba |
+| `eds` | `float \| None` | `None` | Límite EDS a 15 ºC del enunciado, **en tanto por uno** (8,7 % → `0.087`). `None` → 15 %, o 22 % con `antivibradores` |
+
+Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` no es del orden de 10⁻⁵, se lanza un `ValueError`. Así se detectan errores como escribir `chs=15.9` o `alfa_dato=17.8 * 1e6`.
 
 | Método / atributo | Devuelve |
 |---|---|
@@ -179,7 +205,7 @@ python ejemplos.py
 | `exportar_excel(ruta, temperaturas)` | Guarda un Excel con los datos, las hipótesis y la tabla de tendido |
 | `flecha_maxima` | Mayor de las flechas máximas [m] |
 | `dominante` | Nombre de la hipótesis que manda (disponible tras `resolver()`) |
-| `Zona`, `categoria`, `coef`, `v_ref`, `v_excepcional` | Datos derivados de la línea |
+| `Zona`, `categoria`, `coef`, `v_ref`, `v_excepcional`, `limite_eds` | Datos derivados de la línea |
 | `vano_real`, `con_desnivel` | Vano real *b* = √(a² + d²) [m], y si el desnivel llega a `DESNIVEL_MINIMO` |
 
 **Con desnivel**, las tensiones de las tablas cambian de significado: `T0_daN` es la tensión **Tm en el punto medio del vano** y `Tmax_daN` es la tensión **T_B en el apoyo más alto**. A partir de `DESNIVEL_MINIMO` (1 m), el EDS y el CHS se comprueban con T_B, como el viento y el hielo. Por debajo, igual que en un vano a nivel.
@@ -222,6 +248,7 @@ Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dat
 - **Modelos eléctricos:** coinciden con la hoja de cálculo de la asignatura (`Lineas_de_Alta_tension.xlsx`).
 - **Cálculo mecánico a nivel:** reproduce el ejemplo de clase *«Cálculo mecánico de un vano a nivel»* con diferencias menores de 1 daN, debidas al redondeo del ejemplo.
 - **Cálculo mecánico a desnivel:** reproduce el estado inicial del ejercicio de clase *«Cálculo mecánico de vano desnivelado»*: b = 230,87 m y Tm = 740,66 daN.
+- **Límites EDS y CHS del enunciado:** reproduce la tabla del conductor del ejemplo *«Cálculo mecánico de apoyos de una línea aérea de 3ª categoría»* (SJR005: LA-110, zona C, EDS 8,7 %, CHS 15,9 %) en sus tres cantones, con diferencias menores del 0,6 %. Cada cantón se calcula con su vano de regulación y su mayor desnivel.
 
 ## Limitaciones
 
@@ -240,7 +267,8 @@ pytest
 |---|---|
 | `tests/test_modelos_electricos.py` | Los cuatro modelos frente a la hoja de cálculo, el comportamiento físico con susceptancia y el carácter de la carga |
 | `tests/test_conductores.py` | Que los CSV cuadran con las fórmulas del tema (detecta números mal copiados) y la clase `Conductor` |
-| `tests/test_calculo_mecanico.py` | Zona, categoría y coeficiente de seguridad; los ejemplos 1, 2 y 3 del Tema 9; el ejemplo de clase de vano a nivel; que ninguna hipótesis supere su límite; y una **regresión** con cuatro escenarios (zonas A, B y C, categoría especial y vano con catenaria) |
+| `tests/test_calculo_mecanico.py` | Zona, categoría y coeficiente de seguridad; los límites EDS y CHS del enunciado; los ejemplos 1, 2 y 3 del Tema 9; el ejemplo de clase de vano a nivel; el ejemplo SJR005; que ninguna hipótesis supere su límite; la exportación a Excel; y una **regresión** con cuatro escenarios (zonas A, B y C, categoría especial y vano con catenaria) |
+| `tests/test_apoyos.py` | Datos de la línea de `CalculoApoyos` (tipos, cotas, ángulos), errores al introducirlos mal y el esquema |
 | `tests/test_desnivel.py` | Vano a desnivel: que con `desnivel=0` todo sea idéntico al vano a nivel, que el signo no importe, el umbral `DESNIVEL_MINIMO` y los valores del ejercicio de clase |
 
 Los tests de regresión comparan con las tablas de `tests/referencias/`. Si cambias el cálculo **a propósito** y has comprobado que el resultado nuevo es el correcto, regenéralas con:

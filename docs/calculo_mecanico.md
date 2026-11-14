@@ -106,13 +106,14 @@ La **zona** se obtiene de la altitud (A: < 500 m, B: 500–1000 m, C: > 1000 m) 
 
 | Hipótesis | Zona A | Zona B | Zona C | Límite |
 |---|---|---|---|---|
-| EDS | 15 ºC, p | 15 ºC, p | 15 ºC, p | T₀ ≤ 15 % rotura (22 % con antivibradores) |
+| EDS | 15 ºC, p | 15 ºC, p | 15 ºC, p | T₀ ≤ 15 % rotura (22 % con antivibradores), o el límite del enunciado (`eds`) |
 | CHS (*) | −5 ºC, p | −5 ºC, p | −5 ºC, p | T₀ ≤ 20 % rotura |
 | Viento | −5 ºC, p_viento | −10 ºC, p_viento | −15 ºC, p_viento | T_max ≤ rotura / CS |
 | Viento excepcional (**) | −5 ºC | −10 ºC | −15 ºC | T_max ≤ rotura / CS |
 | Hielo (***) | — | −15 ºC, p_hielo | −20 ºC, p_hielo | T_max ≤ rotura / CS |
 
 - (*) El CHS no lo exige el RLAT; es un criterio habitual de las compañías. Se desactiva con `chs=None`.
+- Las compañías suelen fijar límites EDS y CHS propios ("límites dinámicos"), más estrictos que los anteriores. Se indican con `eds` y `chs` en tanto por uno: un 8,7 % se escribe `eds=0.087`.
 - (**) Solo si `Vv` supera el viento de referencia (hipótesis adicional, ITC-LAT-07 3.2.1).
 - (***) En categoría especial se aplica hielo + viento a 60 km/h.
 - **CS** es el coeficiente de seguridad: 2,5 en general, o 3 en media tensión (15–20 kV) para no tener que considerar la rotura de conductores en el cálculo de apoyos.
@@ -237,3 +238,17 @@ Ejercicio de clase *«Cálculo mecánico de vano desnivelado»*: 20 kV, LA-78, 4
 | Flecha en la hipótesis de viento | 6,51 m | 6,56 m |
 
 La flecha del ejercicio tiene una errata: usa $T_m$ = 747 daN en lugar del 740,66 calculado en la línea anterior. Con 740,66 daN sale 6,57 m. El código da 6,56 m porque usa el peso exacto del conductor (0,2666 daN/m) en lugar del redondeado (0,267).
+
+### Límites EDS y CHS del enunciado y cantones con desnivel
+
+Ejemplo *«Cálculo mecánico de apoyos de una línea aérea de 3ª categoría»* (SJR005): 20 kV, LA-110, 1200 m de altitud (zona C), EDS 8,7 %, CHS 15,9 %, E = 8047 daN/mm² y α = 17,8·10⁻⁶ ºC⁻¹. En los tres cantones manda el EDS.
+
+| Cantón | Vano de regulación / mayor desnivel | Hielo −20 ºC (ejemplo / código) [daN] | Viento −15 ºC [daN] | Viento mitad −15 ºC [daN] |
+|---|---|---|---|---|
+| 1-3 | 155,2 m / 0 m | 1354 / 1357,7 | 840 / 844,0 | 598 / 601,6 |
+| 3-5 | 142,6 m / 10 m | 1329 / 1330,2 | 838 / 839,0 | 607 / 607,4 |
+| 5-7 | 155,2 m / 15 m | 1346 / 1347,4 | 833 / 834,8 | 592 / 593,1 |
+
+Las diferencias, menores del 0,6 %, se deben sobre todo a que el ejemplo redondea el peso a 0,425 daN/m.
+
+El ejemplo calcula cada cantón con el **mayor desnivel de sus vanos**. Si se ignorara el desnivel, los cantones 3-5 y 5-7 se desviarían hasta un 1,6 %. La flecha de cada vano se obtiene escalando la del vano de regulación: $f_i = f_r\,(a_i/a_r)^2$. Por ejemplo, 3,87 m · (160/155,2)² = 4,11 m, frente a los 4,1 m del ejemplo.

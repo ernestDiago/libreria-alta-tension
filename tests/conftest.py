@@ -2,9 +2,12 @@
 
 from pathlib import Path
 
+import matplotlib
 import pytest
 
 import alta_tension as at
+
+matplotlib.use("Agg")  # dibujar sin abrir ventanas
 
 CARPETA_REFERENCIAS = Path(__file__).parent / "referencias"
 

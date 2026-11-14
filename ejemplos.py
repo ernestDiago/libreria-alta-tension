@@ -22,7 +22,15 @@ def ejemplo_modelos_electricos():
 
     # Unidades: Pf [MW], Uf [kV], L [km], r y x [Ω/km], g y b [S/km]
     linea = at.Modelo(
-        Pf=600, fp=0.8, Uf=400, L=80, r=0.012, x=0.15, g=0, b=2.7e-6, caracter="inductivo"
+        Pf=600,
+        fp=0.8,
+        Uf=400,
+        L=80,
+        r=0.012,
+        x=0.15,
+        g=0,
+        b=2.7e-6,
+        caracter="inductivo",
     )
 
     print(f"Z = {linea.Z:.2f} Ω,  Y = {linea.Y:.6f} S\n")
@@ -45,7 +53,9 @@ def ejemplo_vano_a_nivel():
     )
 
     calc = at.calculoMecanico(cable, Un=20, alt=600, vano=170, Vv=130)
-    print(f"Zona {calc.Zona}, categoría {calc.categoria}, coef. seguridad {calc.coef}\n")
+    print(
+        f"Zona {calc.Zona}, categoría {calc.categoria}, coef. seguridad {calc.coef}\n"
+    )
     print(calc.resolver().round(2))
     print(f"\nHipótesis que manda: {calc.dominante}")
     print(f"Flecha máxima: {calc.flecha_maxima:.2f} m")
@@ -66,10 +76,14 @@ def ejemplo_vano_a_desnivel():
     calc = at.calculoMecanico(cable, Un=20, alt=400, vano=220, desnivel=70)
 
     print(f"Vano real b = {calc.vano_real:.2f} m")
-    print("T0_daN es la tensión Tm en el punto medio y Tmax_daN la tensión TB en el apoyo alto\n")
+    print(
+        "T0_daN es la tensión Tm en el punto medio y Tmax_daN la tensión TB en el apoyo alto\n"
+    )
     print(calc.resolver().round(2))
     print(f"\nHipótesis que manda: {calc.dominante}")
     print(f"Flecha máxima: {calc.flecha_maxima:.2f} m")
+    print("\nTabla de tendido:")
+    print(calc.tabla_tendido(range(0, 45, 5)).round(2))
 
 
 def main():
