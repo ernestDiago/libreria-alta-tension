@@ -22,7 +22,7 @@ def cable():
 
 @pytest.fixture
 def apoyos(cable):
-    return at.CalculoApoyos(cable, Un=20, alt=600, **DATOS_EJERCICIO)
+    return at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), **DATOS_EJERCICIO)
 
 
 # --- Datos de la línea
@@ -64,7 +64,7 @@ def test_funcion_y_etiqueta(apoyos):
 )
 def test_datos_incorrectos_dan_error(cable, cambio, mensaje):
     with pytest.raises(ValueError, match=mensaje):
-        at.CalculoApoyos(cable, Un=20, alt=600, **{**DATOS_EJERCICIO, **cambio})
+        at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), **{**DATOS_EJERCICIO, **cambio})
 
 
 # --- Cálculo del conductor de cada vano
@@ -74,14 +74,14 @@ def test_cada_vano_usa_su_longitud_y_su_desnivel(apoyos):
     for i, (vano, desnivel) in enumerate([(210, 5), (270, -20), (270, 20), (240, 20)]):
         calc = apoyos.calculo_vano(i)
         assert (calc.vano, calc.desnivel) == (vano, desnivel)
-        assert (calc.Un, calc.alt) == (20, 600)
+        assert calc.linea is apoyos.linea   # todos los cantones usan la misma línea
 
 
 def test_los_datos_de_la_linea_pasan_a_cada_vano(cable):
-    apoyos = at.CalculoApoyos(cable, Un=20, alt=600, eds=0.165, chs=None, **DATOS_EJERCICIO)
+    apoyos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600, eds=0.165, chs=None), **DATOS_EJERCICIO)
     calc = apoyos.calculo_vano(1)
-    assert calc.limite_eds == 0.165
-    assert calc.chs is None
+    assert calc.linea.limite_eds == 0.165
+    assert calc.linea.chs is None
 
 
 # --- Cantones
@@ -105,7 +105,7 @@ SJR005 = {
 @pytest.fixture(scope="module")
 def apoyos_SJR005():
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
-    return at.CalculoApoyos(cable, Un=20, alt=1200, eds=0.087, chs=0.159, **SJR005)
+    return at.CalculoApoyos(cable, at.Linea(Un=20, alt=1200, eds=0.087, chs=0.159), **SJR005)
 
 
 def test_cantones_SJR005(apoyos_SJR005):
@@ -151,7 +151,7 @@ PESOS_SJR005 = {
 @pytest.fixture(scope="module")
 def apoyos_SJR005_resuelto():
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
-    return at.CalculoApoyos(cable, Un=20, alt=1200, tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005)
+    return at.CalculoApoyos(cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005)
 
 
 # (apoyo, hipótesis, esfuerzo) -> valor del PDF. En los apoyos de chapa (2, 4 y 6), T y L antes de
@@ -196,18 +196,18 @@ def test_gravivano_y_eolovano_SJR005(apoyos_SJR005_resuelto):
 def test_hipotesis_que_no_existen(apoyos_SJR005_resuelto, cable):
     with pytest.raises(ValueError, match="no hay 3ª hipótesis"):
         apoyos_SJR005_resuelto.hipotesis_desequilibrio(1)   # fin de línea
-    en_zona_A = at.CalculoApoyos(cable, Un=20, alt=300, **DATOS_EJERCICIO, **PESOS_SJR005)
+    en_zona_A = at.CalculoApoyos(cable, at.Linea(Un=20, alt=300), **DATOS_EJERCICIO, **PESOS_SJR005)
     with pytest.raises(ValueError, match="zona A"):
         en_zona_A.hipotesis_hielo(3)
 
 
 def test_datos_que_faltan_en_las_hipotesis(cable):
-    sin_pesos = at.CalculoApoyos(cable, Un=20, alt=600, tensiones=TENSIONES_ENUNCIADO, **DATOS_EJERCICIO)
+    sin_pesos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO, **DATOS_EJERCICIO)
     with pytest.raises(ValueError, match="peso_cadena_amarre"):
         sin_pesos.hipotesis_viento(3)
     with pytest.raises(ValueError, match="brazo_cruceta"):
         sin_pesos.hipotesis_rotura(3)
-    con_pesos = at.CalculoApoyos(cable, Un=20, alt=600, tensiones=TENSIONES_ENUNCIADO,
+    con_pesos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO,
                                  **DATOS_EJERCICIO, **PESOS_SJR005)
     with pytest.raises(ValueError, match="tramo 1-2"):   # el enunciado no da el vano 1-2
         con_pesos.hipotesis_viento(2)
@@ -235,7 +235,7 @@ RESUMENES_SJR005 = {
 def apoyos_SJR005_con_formas():
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
     return at.CalculoApoyos(
-        cable, Un=20, alt=1200, tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005,
+        cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005,
         formas=["celosía", "chapa", "celosía", "chapa", "celosía", "chapa", "celosía"],
         factor_chapa=at.factor_reduccion_chapa(b=1.365, c=0.985),   # cruceta de bóveda
     )
@@ -256,18 +256,18 @@ def test_resumen_de_esfuerzos_SJR005(apoyos_SJR005_con_formas, numero):
 
 def test_hipotesis_aplicables_ejercicio(cable):
     "LA-180 (rotura 6494 daN) a 20 kV con coeficiente 3: se omite la 4ª en amarre, no en anclaje"
-    apoyos = at.CalculoApoyos(cable, Un=20, alt=600, **DATOS_EJERCICIO)
+    apoyos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), **DATOS_EJERCICIO)
     assert apoyos.hipotesis_aplicables(3) == ["viento", "hielo", "desequilibrio", "rotura"]   # anclaje
     assert apoyos.hipotesis_aplicables(4) == ["viento", "hielo", "desequilibrio"]             # amarre
     assert apoyos.hipotesis_aplicables(5) == ["viento", "hielo", "rotura"]                    # fin de línea
 
 
 def test_hipotesis_aplicables_segun_datos(cable):
-    forzada = at.CalculoApoyos(cable, Un=20, alt=600, rotura=True, **DATOS_EJERCICIO)
+    forzada = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), rotura=True, **DATOS_EJERCICIO)
     assert "rotura" in forzada.hipotesis_aplicables(4)
-    a_132_kV = at.CalculoApoyos(cable, Un=132, alt=600, **DATOS_EJERCICIO)   # > 66 kV: no se omite
+    a_132_kV = at.CalculoApoyos(cable, at.Linea(Un=132, alt=600), **DATOS_EJERCICIO)   # > 66 kV: no se omite
     assert "rotura" in a_132_kV.hipotesis_aplicables(4)
-    en_zona_A = at.CalculoApoyos(cable, Un=20, alt=300, **DATOS_EJERCICIO)
+    en_zona_A = at.CalculoApoyos(cable, at.Linea(Un=20, alt=300), **DATOS_EJERCICIO)
     assert "hielo" not in en_zona_A.hipotesis_aplicables(3)
 
 
@@ -275,7 +275,7 @@ def test_hipotesis_aplicables_segun_datos(cable):
                                              ("hormigón", "desconocida")])
 def test_formas_incorrectas(cable, formas, mensaje):
     with pytest.raises(ValueError, match=mensaje):
-        at.CalculoApoyos(cable, Un=20, alt=600, formas=formas, **DATOS_EJERCICIO)
+        at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), formas=formas, **DATOS_EJERCICIO)
 
 
 # --- Tensiones del enunciado
@@ -286,7 +286,7 @@ TENSIONES_ENUNCIADO = pd.DataFrame(
 
 
 def test_tensiones_del_enunciado_tienen_prioridad(cable):
-    apoyos = at.CalculoApoyos(cable, Un=20, alt=600, tensiones=TENSIONES_ENUNCIADO,
+    apoyos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO,
                               **DATOS_EJERCICIO)
     assert not apoyos.tensiones_calculadas
     assert list(apoyos.tensiones.index) == ["1-2", "2-3", "3-4", "4-5"]   # ordenada por tramos
@@ -303,7 +303,7 @@ def test_tensiones_del_enunciado_tienen_prioridad(cable):
 )
 def test_tensiones_del_enunciado_mal_escritas(cable, tabla, mensaje):
     with pytest.raises(ValueError, match=mensaje):
-        at.CalculoApoyos(cable, Un=20, alt=600, tensiones=tabla, **DATOS_EJERCICIO)
+        at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=tabla, **DATOS_EJERCICIO)
 
 
 # --- Esquema

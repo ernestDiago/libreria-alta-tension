@@ -16,7 +16,7 @@ import alta_tension as at
 def ejercicio():
     "Ejercicio de clase: 20 kV, LA-78, 400 m de altitud, a = 220 m, d = 70 m"
     cable = at.Conductor("LA 78", E_dato=7949, alfa_dato=19.1e-6)
-    return at.calculoMecanico(cable, Un=20, alt=400, vano=220, desnivel=70)
+    return at.calculoMecanico(cable, at.Linea(Un=20, alt=400), vano=220, desnivel=70)
 
 
 # --- Comportamiento general

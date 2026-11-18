@@ -11,3 +11,6 @@ __pycache__/
 # Archivos temporales de Excel y de OneNote
 ~$*.xlsx
 *.onetoc2
+
+# Imagen que genera ejemplos.py
+esquema_apoyos.png

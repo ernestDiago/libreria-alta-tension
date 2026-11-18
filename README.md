@@ -70,7 +70,8 @@ import alta_tension as at
 cable = at.Conductor("LA 56")                                  # E y α típicos según composición
 cable = at.Conductor("LA 56", E_dato=7949, alfa_dato=19.1e-6)  # E y α del enunciado
 
-calc = at.calculoMecanico(cable, Un=20, alt=600, vano=170, Vv=130)
+linea = at.Linea(Un=20, alt=600, Vv=130)       # datos comunes de la línea
+calc = at.calculoMecanico(cable, linea, vano=170)
 
 calc.resolver()          # DataFrame con todas las hipótesis
 calc.dominante           # hipótesis que manda -> 'hielo'
@@ -101,7 +102,7 @@ Basta con añadir el desnivel entre apoyos `desnivel` [m]. El signo da igual: el
 
 ```python
 cable = at.Conductor("LA 78", E_dato=7949, alfa_dato=19.1e-6)
-calc = at.calculoMecanico(cable, Un=20, alt=400, vano=220, desnivel=70)
+calc = at.calculoMecanico(cable, at.Linea(Un=20, alt=400), vano=220, desnivel=70)
 
 calc.vano_real           # 230.87 m
 calc.resolver()          # T0_daN es ahora Tm (punto medio) y Tmax_daN es TB (apoyo alto)
@@ -119,7 +120,7 @@ flecha mínima                -5       0.27  332.19    342.94     14.37        1
 desviación cadena            -5       0.43  491.32    508.94     21.25        22.01      5.85       NaN
 ```
 
-El archivo [`ejemplos.py`](ejemplos.py) resuelve estos tres ejemplos completos, cada uno en su propia función:
+El archivo [`ejemplos.py`](ejemplos.py) resuelve estos ejemplos completos y los de apoyos (con las tensiones del enunciado y calculándolas por cantones), cada uno en su propia función:
 
 ```bash
 python ejemplos.py
@@ -134,7 +135,7 @@ cable = at.Conductor("LA 180", E_dato=8000, alfa_dato=17.8e-6)
 
 apoyos = at.CalculoApoyos(
     conductor=cable,
-    Un=20, alt=600,                  # y, si hace falta, eds, chs, Vv... como en calculoMecanico
+    linea=at.Linea(Un=20, alt=600),  # y, si hace falta, eds, chs, Vv...
     vanos=[210, 270, 270, 240],
     desniveles=[0, 5, -20, 20, 20],
     tipos=["fin de línea", "amarre", "anclaje", "amarre", "fin de línea"],
@@ -160,7 +161,7 @@ Si el **enunciado da las tensiones**, se pasan en una tabla con los tramos como 
 ```python
 tensiones = pd.DataFrame({"hielo": [2107, 2107, 2116], "viento": [1747, 1747, 1758]},
                          index=["2-3", "3-4", "4-5"])
-apoyos = at.CalculoApoyos(cable, Un=20, alt=600, ..., tensiones=tensiones)
+apoyos = at.CalculoApoyos(cable, linea, ..., tensiones=tensiones)
 apoyos.tensiones_calculadas  # False: se están usando las del enunciado
 ```
 
@@ -171,7 +172,7 @@ El cable de cada vano se dibuja en el esquema con la parábola de la hipótesis 
 Necesitan los pesos de cadenas y crucetas y, para la 4ª, el brazo de la cruceta:
 
 ```python
-apoyos = at.CalculoApoyos(cable, Un=20, alt=600, ..., tensiones=tensiones,
+apoyos = at.CalculoApoyos(cable, linea, ..., tensiones=tensiones,
                           peso_cadena_amarre=12,        # cadena + herrajes [daN]
                           peso_cruceta=70,              # [daN]
                           brazo_cruceta=1.75)           # conductor exterior - eje [m]
@@ -237,22 +238,32 @@ Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de 
 
 **Atributos calculados:** `datos` (fila completa del CSV), `p` (peso propio, daN/m), `d` (diámetro, mm), `S` (sección, mm²), `rotura` (carga de rotura, daN), `E` y `alfa`.
 
-### `calculoMecanico`
+### `Linea`
+
+Datos comunes a todos los cálculos mecánicos de una línea. Se crea una vez y se pasa a `calculoMecanico` y a `CalculoApoyos`.
 
 | Parámetro | Tipo | Por defecto | Descripción |
 |---|---|---|---|
-| `conductor` | `Conductor` | — | Conductor de la línea |
 | `Un` | `float` | — | Tensión nominal [kV]. Determina la categoría |
 | `alt` | `float` | — | Altitud [m]. Determina la zona A / B / C |
-| `vano` | `float` | — | Vano **proyectado** *a*, distancia horizontal entre apoyos (o vano de regulación) [m] |
 | `Vv` | `float \| None` | `None` | Viento máximo de la zona [km/h]. Si supera 120 (140 en categoría especial), se añade la hipótesis de **viento excepcional** |
-| `desnivel` | `float` | `0.0` | Diferencia de altura *d* entre los dos apoyos del vano [m]. `0` → vano a nivel |
 | `antivibradores` | `bool` | `False` | Si es `True`, el límite del EDS sube del 15 % al 22 % |
 | `coef_seguridad` | `float \| None` | `None` | Coeficiente de seguridad a rotura. `None` → 3 en media tensión (15–20 kV) y 2,5 en el resto |
 | `chs` | `float \| None` | `0.20` | Límite CHS a −5 ºC, **en tanto por uno** (15,9 % → `0.159`). `None` → no se comprueba |
 | `eds` | `float \| None` | `None` | Límite EDS a 15 ºC del enunciado, **en tanto por uno** (8,7 % → `0.087`). `None` → 15 %, o 22 % con `antivibradores` |
 
-Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` no es del orden de 10⁻⁵, se lanza un `ValueError`. Así se detectan errores como escribir `chs=15.9` o `alfa_dato=17.8 * 1e6`.
+**Atributos calculados:** `Zona`, `categoria`, `coef` (coeficiente de seguridad), `v_ref` (viento de referencia), `v_excepcional` y `limite_eds`.
+
+Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` (en `Conductor`) no es del orden de 10⁻⁵, se lanza un `ValueError`. Así se detectan errores como escribir `chs=15.9` o `alfa_dato=17.8 * 1e6`.
+
+### `calculoMecanico`
+
+| Parámetro | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `conductor` | `Conductor` | — | Conductor de la línea |
+| `linea` | `Linea` | — | Datos de la línea |
+| `vano` | `float` | — | Vano **proyectado** *a*, distancia horizontal entre apoyos (o vano de regulación) [m] |
+| `desnivel` | `float` | `0.0` | Diferencia de altura *d* entre los dos apoyos del vano [m]. `0` → vano a nivel |
 
 | Método / atributo | Devuelve |
 |---|---|
@@ -261,7 +272,7 @@ Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` no es del orden de 10⁻�
 | `exportar_excel(ruta, temperaturas)` | Guarda un Excel con los datos, las hipótesis y la tabla de tendido |
 | `flecha_maxima` | Mayor de las flechas máximas [m] |
 | `dominante` | Nombre de la hipótesis que manda (disponible tras `resolver()`) |
-| `Zona`, `categoria`, `coef`, `v_ref`, `v_excepcional`, `limite_eds` | Datos derivados de la línea |
+| `linea.Zona`, `linea.categoria`, `linea.coef`… | Datos derivados de la línea (ver `Linea`) |
 | `vano_real`, `con_desnivel` | Vano real *b* = √(a² + d²) [m], y si el desnivel llega a `DESNIVEL_MINIMO` |
 
 **Con desnivel**, las tensiones de las tablas cambian de significado: `T0_daN` es la tensión **Tm en el punto medio del vano** y `Tmax_daN` es la tensión **T_B en el apoyo más alto**. A partir de `DESNIVEL_MINIMO` (1 m), el EDS y el CHS se comprueban con T_B, como el viento y el hielo. Por debajo, igual que en un vano a nivel.

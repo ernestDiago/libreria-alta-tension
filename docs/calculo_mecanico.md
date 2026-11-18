@@ -194,7 +194,8 @@ La flecha con la catenaria (vanos de más de 500 m) todavía usa el vano proyect
 | Método | Qué hace |
 |---|---|
 | `Conductor.__post_init__` | Lee el CSV y obtiene p, d, S, rotura, E y α |
-| `calculoMecanico.__post_init__` | Calcula zona, categoría, viento de referencia y excepcional, coeficiente de seguridad, `vano_real` y `con_desnivel` |
+| `Linea.__post_init__` | Calcula zona, categoría, viento de referencia y excepcional, coeficiente de seguridad y límite del EDS |
+| `calculoMecanico.__post_init__` | Calcula `vano_real` y `con_desnivel` |
 | `_q`, `_pv`, `_p_viento`, `_p_viento_mitad`, `_p_hielo`, `_sobrecarga_conjunta` | Sobrecargas (apartado 4) |
 | `_cambio_condiciones` | Ecuación de cambio de condiciones (apartados 5 y 8.2) |
 | `_T0_desde_Tmax`, `_Tmax` | Conversión entre T₀ (o $T_m$) y T_max (o $T_B$) (apartados 2 y 8.1) |

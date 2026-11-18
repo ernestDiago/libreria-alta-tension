@@ -209,25 +209,16 @@ class Conductor:
 
 
 @dataclass
-class calculoMecanico:
-    conductor: Conductor
-    Un: float  # Tensión compuesta de la linea [kV]
-    alt: float  # Altitid de la linea [m]
-    vano: float  # Longitud del vano [m]
-    Vv: float | None = (
-        None  # Velocidad máxima del viento en la zona [km/h] (si > 120/140 -> viento excepcional)
-    )
-    desnivel: float = 0.0  # Desnivel entre vanos
+class Linea:
+    "Datos de la línea comunes a todos sus cálculos mecánicos: tensión, altitud, viento y límites"
+
+    Un: float  # Tensión nominal de la línea [kV]
+    alt: float  # Altitud de la línea [m]
+    Vv: float | None = None  # Viento máximo de la zona [km/h] (si > 120/140 -> viento excepcional)
     antivibradores: bool = False  # Si hay antivibradores el EDS sube del 15 % al 22 %
-    coef_seguridad: float | None = (
-        None  # None -> 3 en media tensión (15-20 kV), 2,5 en el resto
-    )
-    chs: float | None = (
-        0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
-    )
-    eds: float | None = (
-        None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 % con antivibradores)
-    )
+    coef_seguridad: float | None = None  # None -> 3 en media tensión (15-20 kV), 2,5 en el resto
+    chs: float | None = 0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
+    eds: float | None = None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 %)
 
     def __post_init__(self):
 
@@ -261,6 +252,16 @@ class calculoMecanico:
         else:
             self.coef = self.coef_seguridad
 
+
+@dataclass
+class calculoMecanico:
+    conductor: Conductor
+    linea: Linea  # Datos de la línea (tensión, altitud, viento, límites...)
+    vano: float  # Vano proyectado a, o vano de regulación [m]
+    desnivel: float = 0.0  # Desnivel entre los apoyos del vano [m]
+
+    def __post_init__(self):
+
         # Desnivel
         self.vano_real = math.sqrt(self.vano**2 + self.desnivel**2)
         self.con_desnivel = abs(self.desnivel) >= DESNIVEL_MINIMO
@@ -276,7 +277,7 @@ class calculoMecanico:
 
     def _pv(self, v=None):
         "Sobrecarga de viento p_v [daN/m] (por defecto con el viento de referencia)"
-        v = self.v_ref if v is None else v
+        v = self.linea.v_ref if v is None else v
         return self.conductor.d / 1000 * self._q(v, self.conductor.d)
 
     def _p_viento(self, v=None):
@@ -292,20 +293,20 @@ class calculoMecanico:
 
     def _p_hielo(self):
         "Peso total con hielo [daN/m]; en zona A no hay hielo"
-        if self.Zona == "A":
+        if self.linea.Zona == "A":
             return self.conductor.p
 
-        k = 0.18 if self.Zona == "B" else 0.36
+        k = 0.18 if self.linea.Zona == "B" else 0.36
         return self.conductor.p + k * self.conductor.d**0.5
 
     def _sobrecarga_conjunta(self):
         "Peso total con hielo + viento a 60 km/h [daN/m]. Solo zonas B y C."
-        if self.Zona == "A":
+        if self.linea.Zona == "A":
             raise ValueError(
                 "En zona A no se aplica la sobrecarga conjunta de hielo y viento"
             )
 
-        D = self.conductor.datos[f"d_manguito_hielo_{self.Zona}_mm"]
+        D = self.conductor.datos[f"d_manguito_hielo_{self.linea.Zona}_mm"]
         pv_prima = self._q(60, D) * D / 1000
         return (self._p_hielo() ** 2 + pv_prima**2) ** 0.5
 
@@ -371,36 +372,36 @@ class calculoMecanico:
         """Hipótesis que limitan la tensión.
         Cada una: (nombre, θ [ºC], p_t [daN/m], T_límite [daN], el límite se aplica a Tmax?)"""
         R = self.conductor.rotura
-        t_v = T_VIENTO[self.Zona]
+        t_v = T_VIENTO[self.linea.Zona]
 
         lista = [
-            ("EDS", 15, self.conductor.p, self.limite_eds * R, self.con_desnivel),
-            ("viento", t_v, self._p_viento(self.v_ref), R / self.coef, True),
+            ("EDS", 15, self.conductor.p, self.linea.limite_eds * R, self.con_desnivel),
+            ("viento", t_v, self._p_viento(self.linea.v_ref), R / self.linea.coef, True),
         ]
-        if self.chs is not None:
-            lista.append(("CHS", -5, self.conductor.p, self.chs * R, self.con_desnivel))
-        if self.v_excepcional is not None:
+        if self.linea.chs is not None:
+            lista.append(("CHS", -5, self.conductor.p, self.linea.chs * R, self.con_desnivel))
+        if self.linea.v_excepcional is not None:
             lista.append(
                 (
                     "viento excepcional",
                     t_v,
-                    self._p_viento(self.v_excepcional),
-                    R / self.coef,
+                    self._p_viento(self.linea.v_excepcional),
+                    R / self.linea.coef,
                     True,
                 )
             )
-        if self.Zona in T_HIELO:
+        if self.linea.Zona in T_HIELO:
             p_h = (
                 self._sobrecarga_conjunta()
-                if self.categoria == "especial"
+                if self.linea.categoria == "especial"
                 else self._p_hielo()
             )
-            lista.append(("hielo", T_HIELO[self.Zona], p_h, R / self.coef, True))
+            lista.append(("hielo", T_HIELO[self.linea.Zona], p_h, R / self.linea.coef, True))
         return lista
 
     def _hipotesis_resultado(self):
         "Hipótesis de flechas: (nombre, θ [ºC], p_t [daN/m])"
-        t_max = 85 if self.categoria == "especial" else 50
+        t_max = 85 if self.linea.categoria == "especial" else 50
         lista = [
             (
                 "flecha viento 15ºC",
@@ -409,11 +410,11 @@ class calculoMecanico:
             ),  # siempre 120 km/h (aptdo. 3.2.3)
             (f"flecha temperatura {t_max}ºC", t_max, self.conductor.p),
         ]
-        if self.Zona in T_HIELO:
+        if self.linea.Zona in T_HIELO:
             lista.append(("flecha hielo 0ºC", 0, self._p_hielo()))
         lista += [
-            ("flecha mínima", T_FLECHA_MIN[self.Zona], self.conductor.p),
-            ("desviación cadena", T_VIENTO[self.Zona], self._p_viento_mitad()),
+            ("flecha mínima", T_FLECHA_MIN[self.linea.Zona], self.conductor.p),
+            ("desviación cadena", T_VIENTO[self.linea.Zona], self._p_viento_mitad()),
         ]
         return lista
 
@@ -553,20 +554,20 @@ class calculoMecanico:
                 ["Carga de rotura", c.rotura, "daN"],
                 ["Módulo de elasticidad E", c.E, "daN/mm²"],
                 ["Coef. dilatación α", c.alfa, "1/ºC"],
-                ["Tensión nominal Un", self.Un, "kV"],
-                ["Altitud", self.alt, "m"],
-                ["Zona", self.Zona, ""],
-                ["Categoría", self.categoria, ""],
+                ["Tensión nominal Un", self.linea.Un, "kV"],
+                ["Altitud", self.linea.alt, "m"],
+                ["Zona", self.linea.Zona, ""],
+                ["Categoría", self.linea.categoria, ""],
                 ["Vano", self.vano, "m"],
-                ["Viento de referencia", self.v_ref, "km/h"],
+                ["Viento de referencia", self.linea.v_ref, "km/h"],
                 [
                     "Viento excepcional",
-                    self.v_excepcional if self.v_excepcional else "—",
+                    self.linea.v_excepcional if self.linea.v_excepcional else "—",
                     "km/h",
                 ],
-                ["Coeficiente de seguridad", self.coef, ""],
-                ["Límite EDS", round(100 * self.limite_eds, 2), "% rotura"],
-                ["Límite CHS", round(100 * self.chs, 2) if self.chs is not None else "—", "% rotura"],
+                ["Coeficiente de seguridad", self.linea.coef, ""],
+                ["Límite EDS", round(100 * self.linea.limite_eds, 2), "% rotura"],
+                ["Límite CHS", round(100 * self.linea.chs, 2) if self.linea.chs is not None else "—", "% rotura"],
                 ["Hipótesis que manda", self.dominante, ""],
                 ["Flecha máxima", round(self.flecha_maxima, 2), "m"],
             ],
@@ -679,8 +680,7 @@ class Canton:
 class CalculoApoyos:
 
     conductor: Conductor        # Propiedades de los conductores
-    Un : float                  # Tensión de la linea
-    alt: float                  # Altitud de la linea
+    linea: Linea                # Datos de la línea (tensión, altitud, viento, límites...)
     vanos: list[float]          # Vano entre cada par de apoyos consecutivos [m] (n - 1 valores)
     desniveles: list[float]     # Desnivel de cada apoyo respecto al anterior [m] (n valores, el 1º = 0)
     tipos: list[str]            # Tipo de cada apoyo, uno de TIPOS_APOYO (n valores)
@@ -688,13 +688,6 @@ class CalculoApoyos:
         default_factory=dict  # {nº de apoyo: ángulo [º]} de los apoyos de ángulo
     )
     tensiones: pd.DataFrame | None = None # Tabla que me da el enuunciado en caso de que me de las tensiones
-
-    # Datos de la línea para calcular cada vano (mismos valores por defecto que calculoMecanico)
-    Vv: float | None = None  # Viento máximo de la zona [km/h]
-    antivibradores: bool = False  # Si hay antivibradores el EDS sube del 15 % al 22 %
-    coef_seguridad: float | None = None  # None -> 3 en media tensión (15-20 kV), 2,5 en el resto
-    chs: float | None = 0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
-    eds: float | None = None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 %)
 
     # Datos de los apoyos para calcular los esfuerzos
     n_conductores: int = 3  # Nº de conductores (3 en un circuito simplex)
@@ -791,18 +784,7 @@ class CalculoApoyos:
             vano_regulacion = math.sqrt(sum(a**3 for a in vanos) / sum(vanos))
             desnivel = max(desniveles, key=abs)
 
-            calculo = calculoMecanico(
-                self.conductor,
-                Un=self.Un,
-                alt=self.alt,
-                vano=vano_regulacion,
-                desnivel=desnivel,
-                Vv=self.Vv,
-                antivibradores=self.antivibradores,
-                coef_seguridad=self.coef_seguridad,
-                chs=self.chs,
-                eds=self.eds,
-            )
+            calculo = calculoMecanico(self.conductor, self.linea, vano=vano_regulacion, desnivel=desnivel)
             calculo.resolver()  # los resultados quedan guardados en calculo.resultados
             cantones.append(Canton(inicio, fin, vano_regulacion, desnivel, calculo))
         return cantones
@@ -892,7 +874,7 @@ class CalculoApoyos:
 
     def _hipotesis_base(self) -> str:
         "Sobrecarga de la 3ª y 4ª hipótesis: hielo en zonas B y C, viento en zona A"
-        return "viento" if self.cantones[0].calculo.Zona == "A" else "hielo"
+        return "viento" if self.linea.Zona == "A" else "hielo"
 
     #  HIPÓTESIS DE CÁLCULO DE APOYOS (ITC-LAT-07 3.5.3)
     # Cada una devuelve los esfuerzos del apoyo sin reducir al punto del fabricante [daN, daN·m]:
@@ -918,9 +900,9 @@ class CalculoApoyos:
     def hipotesis_hielo(self, numero: int) -> dict:
         "2ª hipótesis: hielo (solo zonas B y C)"
         calc = self.cantones[0].calculo
-        if calc.Zona == "A":
+        if self.linea.Zona == "A":
             raise ValueError("En zona A no hay 2ª hipótesis (hielo)")
-        if calc.categoria == "especial":
+        if self.linea.categoria == "especial":
             raise NotImplementedError("Falta la 2ª hipótesis de categoría especial (hielo + viento)")
 
         n, tipo, alfa = self.n_conductores, self.tipos[numero - 1], self.angulos.get(numero)
@@ -942,7 +924,7 @@ class CalculoApoyos:
 
         base = self._hipotesis_base()
         V = (self.hipotesis_hielo(numero) if base == "hielo" else self.hipotesis_viento(numero))["V"]
-        k = DESEQUILIBRIO[tipo][self.Un > 66]
+        k = DESEQUILIBRIO[tipo][self.linea.Un > 66]
         T_max = max(self._tension(tramo, base) for tramo, *_ in self._lados(numero))
 
         if alfa:  # por un lado T_max y por el otro (1 - k)·T_max
@@ -985,16 +967,16 @@ class CalculoApoyos:
         if self.tipos[numero - 1] not in ("suspensión", "amarre"):
             return True
         exenta = (
-            self.Un <= 66
+            self.linea.Un <= 66
             and self.conductor.rotura < 6600
-            and min(c.calculo.coef for c in self.cantones) >= 3
+            and self.linea.coef >= 3
         )
         return not exenta
 
     def hipotesis_aplicables(self, numero: int) -> list[str]:
         "Hipótesis que se calculan en el apoyo, según la zona, su tipo y la 4ª hipótesis"
         hipotesis = ["viento"]
-        if self.cantones[0].calculo.Zona != "A":
+        if self.linea.Zona != "A":
             hipotesis.append("hielo")
         if self.tipos[numero - 1] not in TIPOS_SIN_ANGULO:
             hipotesis.append("desequilibrio")

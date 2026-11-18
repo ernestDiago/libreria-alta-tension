@@ -13,21 +13,21 @@ import alta_tension as at
     "altitud, zona", [(0, "A"), (499.9, "A"), (500, "B"), (1000, "B"), (1000.1, "C")]
 )
 def test_zona_segun_altitud(altitud, zona):
-    assert crear_calculo("zonaA_LA110", alt=altitud).Zona == zona
+    assert crear_calculo("zonaA_LA110", alt=altitud).linea.Zona == zona
 
 
 @pytest.mark.parametrize("Un, categoria", [(20, "normal"), (132, "normal"), (220, "especial"), (400, "especial")])
 def test_categoria_segun_tension(Un, categoria):
-    assert crear_calculo("zonaA_LA110", Un=Un).categoria == categoria
+    assert crear_calculo("zonaA_LA110", Un=Un).linea.categoria == categoria
 
 
 @pytest.mark.parametrize("Un, coef", [(15, 3), (20, 3), (66, 2.5), (400, 2.5)])
 def test_coeficiente_de_seguridad(Un, coef):
-    assert crear_calculo("zonaA_LA110", Un=Un).coef == coef
+    assert crear_calculo("zonaA_LA110", Un=Un).linea.coef == coef
 
 
 def test_coeficiente_de_seguridad_del_enunciado():
-    assert crear_calculo("zonaA_LA110", coef_seguridad=3.5).coef == 3.5
+    assert crear_calculo("zonaA_LA110", coef_seguridad=3.5).linea.coef == 3.5
 
 
 @pytest.mark.parametrize(
@@ -35,7 +35,7 @@ def test_coeficiente_de_seguridad_del_enunciado():
     [(66, None, None), (66, 110, None), (66, 130, 130), (220, 130, None), (220, 150, 150)],
 )
 def test_viento_excepcional(Un, Vv, excepcional):
-    assert crear_calculo("zonaA_LA110", Un=Un, Vv=Vv).v_excepcional == excepcional
+    assert crear_calculo("zonaA_LA110", Un=Un, Vv=Vv).linea.v_excepcional == excepcional
 
 
 # --- Ejemplos resueltos del Tema 9
@@ -43,13 +43,13 @@ def test_viento_excepcional(Un, Vv, excepcional):
 
 def test_tema9_ejemplo1_flecha():
     "LA 110 en un vano de 120 m con T = 800 daN -> f = 0,954 m"
-    calc = at.calculoMecanico(at.Conductor("LA 110"), Un=66, alt=300, vano=120)
+    calc = at.calculoMecanico(at.Conductor("LA 110"), at.Linea(Un=66, alt=300), vano=120)
     assert calc._flecha(800, calc.conductor.p) == pytest.approx(0.954, abs=0.001)
 
 
 def test_tema9_ejemplo2_tension():
     "LA 56 en un vano de 120 m con f = 1,2 m -> T0 = 277,8 daN y Tmax = 278 daN"
-    calc = at.calculoMecanico(at.Conductor("LA 56"), Un=66, alt=300, vano=120)
+    calc = at.calculoMecanico(at.Conductor("LA 56"), at.Linea(Un=66, alt=300), vano=120)
     p = calc.conductor.p
     assert calc._flecha(277.8, p) == pytest.approx(1.2, abs=0.001)
     assert calc._Tmax(277.8, p) == pytest.approx(278, abs=0.05)
@@ -57,7 +57,7 @@ def test_tema9_ejemplo2_tension():
 
 def test_tema9_ejemplo3_sobrecargas():
     "LA 78 a 700 m de altitud (zona B), línea de 2ª categoría"
-    calc = at.calculoMecanico(at.Conductor("LA 78"), Un=66, alt=700, vano=100)
+    calc = at.calculoMecanico(at.Conductor("LA 78"), at.Linea(Un=66, alt=700), vano=100)
     assert calc._pv() == pytest.approx(0.678, abs=0.001)          # a) viento
     assert calc._p_viento() == pytest.approx(0.728, abs=0.001)
     assert calc._p_hielo() == pytest.approx(0.871, abs=0.001)     # b) hielo
@@ -179,12 +179,12 @@ def test_flecha_maxima_supera_a_la_de_tendido(caso):
 
 
 def test_limite_eds_por_defecto():
-    assert crear_calculo("zonaA_LA110").limite_eds == 0.15
-    assert crear_calculo("zonaA_LA110", antivibradores=True).limite_eds == 0.22
+    assert crear_calculo("zonaA_LA110").linea.limite_eds == 0.15
+    assert crear_calculo("zonaA_LA110", antivibradores=True).linea.limite_eds == 0.22
 
 
 def test_limite_eds_del_enunciado_tiene_prioridad():
-    assert crear_calculo("zonaA_LA110", eds=0.087, antivibradores=True).limite_eds == 0.087
+    assert crear_calculo("zonaA_LA110", eds=0.087, antivibradores=True).linea.limite_eds == 0.087
 
 
 @pytest.mark.parametrize("limite", ["eds", "chs"])
@@ -215,7 +215,7 @@ def test_ejemplo_SJR005(canton):
     (vano, desnivel), tensiones = SJR005[canton]
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
     calc = at.calculoMecanico(
-        cable, Un=20, alt=1200, vano=vano, desnivel=desnivel, eds=0.087, chs=0.159
+        cable, at.Linea(Un=20, alt=1200, eds=0.087, chs=0.159), vano=vano, desnivel=desnivel
     )
     resultados = calc.resolver()
     assert calc.dominante == "EDS"

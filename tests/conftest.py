@@ -1,5 +1,6 @@
 """Datos y escenarios compartidos por los tests."""
 
+import dataclasses
 from pathlib import Path
 
 import matplotlib
@@ -10,6 +11,7 @@ import alta_tension as at
 matplotlib.use("Agg")  # dibujar sin abrir ventanas
 
 CARPETA_REFERENCIAS = Path(__file__).parent / "referencias"
+CAMPOS_LINEA = {campo.name for campo in dataclasses.fields(at.Linea)}
 
 # Escenarios de cálculo mecánico: nombre -> (conductor, datos del conductor, datos de la línea)
 CASOS_MECANICOS = {
@@ -25,9 +27,12 @@ CASOS_MECANICOS = {
 
 
 def crear_calculo(caso, **cambios):
-    "Crea el calculoMecanico de un escenario. Con **cambios se sobrescriben datos de la línea"
-    conductor, datos_conductor, datos_linea = CASOS_MECANICOS[caso]
-    return at.calculoMecanico(at.Conductor(conductor, **datos_conductor), **{**datos_linea, **cambios})
+    "Crea el calculoMecanico de un escenario. Con **cambios se sobrescriben sus datos"
+    conductor, datos_conductor, datos = CASOS_MECANICOS[caso]
+    datos = {**datos, **cambios}
+    linea = at.Linea(**{k: v for k, v in datos.items() if k in CAMPOS_LINEA})
+    resto = {k: v for k, v in datos.items() if k not in CAMPOS_LINEA}  # vano y desnivel
+    return at.calculoMecanico(at.Conductor(conductor, **datos_conductor), linea, **resto)
 
 
 @pytest.fixture(params=CASOS_MECANICOS)
