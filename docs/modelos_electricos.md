@@ -73,7 +73,10 @@ En el modelo de parámetros distribuidos, si $\bar Y = 0$ el cociente $\sinh(\ba
 | Potencia aparente en el origen | $\bar S_0 = 3\,\bar V_0\,\bar I_0^{*}$ | — |
 | Potencia activa en el origen | $P_0 = \mathrm{Re}(\bar S_0)$ | MW |
 | Pérdidas de potencia | $\Delta P = P_0 - P_f$ | MW |
+| Pérdidas respecto a la potencia en el origen | $100\,\Delta P / P_0$ | % |
 | Caída de tensión aritmética | $\Delta U = U_0 - U_f$ | kV |
+| Caída de tensión respecto a la nominal | $100\,\Delta U / U_f$ | % |
+| Intensidad de vacío (la que absorbe la línea por su capacidad) | $\lvert\bar C\,\bar V_f\rvert$ | A |
 
 ## 6. Correspondencia con el código
 
@@ -104,3 +107,6 @@ Con $b = 2{,}7\cdot10^{-6}$ S/km, los modelos se separan como cabe esperar: el i
 | U₀ [kV] | 415,285 | 414,758 | 414,769 | 414,761 |
 | I₀ [A] | 1082,53 | 1051,96 | 1051,98 | 1051,97 |
 | ΔP [MW] | 3,375 | 3,281 | 3,283 | 3,281 |
+| Intensidad de vacío [A] | 0 | 49,88 | 49,85 | 49,86 |
+
+Estos valores son **idénticos** a los de la hoja de cálculo corregida por el profesor, que usa estos mismos datos con $b = 2{,}7\cdot10^{-6}$ S/km. Coinciden los 8 resultados, las constantes A, B, C y D, y $\bar V_0$ e $\bar I_0$ en complejo de los cuatro modelos, con diferencias del orden de $10^{-13}$ (redondeo de la coma flotante). En la hoja, ΔP/P₀ y ΔU/U_f están en tanto por uno, y la librería los da en %.

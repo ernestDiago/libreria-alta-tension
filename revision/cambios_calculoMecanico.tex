@@ -1,0 +1,466 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage[table]{xcolor}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+% --- Colores y estilos -------------------------------------------------------
+\definecolor{antes}{HTML}{B03A2E}
+\definecolor{ahora}{HTML}{1E8449}
+\definecolor{nota}{HTML}{2874A6}
+\definecolor{gris}{HTML}{7F8C8D}
+\definecolor{fondo}{HTML}{F4F6F7}
+\definecolor{titulo}{HTML}{1F4E79}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\setlength{\emergencystretch}{3em}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{fondo},
+  frame=single, rulecolor=\color{fondo},
+  keywordstyle=\color{titulo}\bfseries,
+  commentstyle=\color{gris}\itshape,
+  stringstyle=\color{ahora},
+  columns=fullflexible, keepspaces=true,
+  breaklines=true, showstringspaces=false,
+  inputencoding=utf8, extendedchars=true,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1
+           {ñ}{{\~n}}1 {º}{{\textordmasculine}}1 {→}{{$\rightarrow$}}1
+           {≤}{{$\le$}}1 {≥}{{$\ge$}}1 {·}{{$\cdot$}}1 {−}{{-}}1
+           {²}{{$^2$}}1 {√}{{$\surd$}}1 {α}{{$\alpha$}}1
+}
+
+\newtcolorbox{caja}[2][]{colback=#2!5, colframe=#2!70!black, boxrule=0.4pt,
+  left=6pt, right=6pt, top=3pt, bottom=3pt, fonttitle=\bfseries\small,
+  coltitle=white, #1}
+
+\newcommand{\antes}[1]{\noindent\textcolor{antes}{\textbf{Antes.}} #1\par\smallskip}
+\newcommand{\ahora}[1]{\noindent\textcolor{ahora}{\textbf{Ahora.}} #1\par\smallskip}
+
+\titleformat{\section}{\Large\bfseries\color{titulo}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Cambios en \code{calculoMecanico}}
+\rhead{\small Librería de Alta Tensión}
+\cfoot{\small\thepage}
+
+\begin{document}
+\sloppy  % los nombres largos en \code no se salen del margen
+
+% =============================================================================
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries\color{titulo} Arreglos de la revisión de\\[0.3em] \code{calculoMecanico}\par}
+\vspace{1cm}
+{\Large Qué se ha cambiado en el código y por qué\par}
+\vspace{0.4cm}
+{\large Librería de Alta Tensión -- Generación, Distribución y Utilización de la Energía Eléctrica\par}
+\vspace{2.5cm}
+\begin{tcolorbox}[colback=fondo, colframe=titulo, width=0.85\textwidth]
+\centering
+\begin{tabular}{ll}
+\textbf{Archivos cambiados} & \code{alta\_tension.py}, \code{README.md},\\
+                            & \code{docs/calculo\_mecanico.md} y los tests\\[0.3em]
+\textbf{Fallos arreglados}  & F1--F12 y D2 (de la revisión anterior)\\[0.3em]
+\textbf{Tests}              & 267 pasan (50 nuevos)\\[0.3em]
+\textbf{Comprobación}       & más de 5\,000 casos antes/después
+\end{tabular}
+\end{tcolorbox}
+\vfill
+{\large 22 de noviembre de 2026\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Resumen}
+
+Este documento explica los cambios hechos en \code{alta\_tension.py} para arreglar los fallos del informe \emph{Revisión de la clase calculoMecanico} (\code{revision\_calculoMecanico.pdf}). Los identificadores (F1, F2\ldots) son los de ese informe.
+
+\begin{caja}[title=Lo más importante]{ahora}
+\begin{itemize}[leftmargin=1.2em, itemsep=2pt]
+  \item \textbf{Con vanos de hasta 500\,m y desnivel de 1\,m o más, o a nivel, los resultados son exactamente los mismos que antes}: se han comparado 840 casos y no cambia ni un decimal. Los ejercicios de clase, el vano desnivelado y el SJR005 siguen dando lo mismo.
+  \item \textbf{Con vanos de más de 500\,m} (catenaria) ahora la hipótesis que manda queda \emph{justo} en su límite y la flecha no salta al pasar de 500\,m.
+  \item \textbf{Los vanos imposibles} dan un error que explica qué hipótesis no se puede cumplir y por cuánto.
+  \item \textbf{Los datos ya no se quedan viejos} si cambias un objeto después de crearlo, y los datos imposibles dan un error claro.
+\end{itemize}
+\end{caja}
+
+\subsection*{Tabla de cambios}
+
+\renewcommand{\arraystretch}{1.25}
+\begin{longtable}{>{\bfseries}l p{6.2cm} p{6.6cm}}
+\toprule
+\textbf{Id} & \textbf{Problema} & \textbf{Solución} \\
+\midrule
+\endhead
+F1 & Con vano $>500$\,m la dominante superaba su límite (hasta un 7\,\%) & \code{\_T0\_desde\_Tmax} invierte la catenaria por bisección \\
+F2 & Con desnivel, la flecha saltaba un 13\,\% en 500\,m & La catenaria usa el vano real $b$, como la parábola \\
+F3 & La búsqueda de la dominante no comprobaba si había convergido & Una vuelta más y error si no converge \\
+F4 & Vano inviable: \code{math domain error} o resultado que incumple & Se calcula la $T_{max}$ mínima posible y se da un error claro \\
+F5 & Cambiar \code{vano} o \code{desnivel} dejaba resultados viejos & \code{vano\_real}, \code{con\_desnivel} y \code{dominante} son \code{@property}; \code{flecha\_maxima} recalcula \\
+F6 & Cambiar una \code{Linea} o un \code{Conductor} no actualizaba sus datos & Datos deducidos como \code{@property} y método \code{validar()} \\
+F7 & Se aceptaban datos imposibles & \code{validar()} en las tres clases \\
+F8 & Se aceptaba un coeficiente de seguridad $<2{,}5$ & Aviso (\code{warnings.warn}) \\
+F9 & Los CSV de AL1 y AL2 no funcionaban & Conductores homogéneos admitidos (con \code{E\_dato} y \code{alfa\_dato}) \\
+F10 & Conductor inexistente: \code{KeyError} sin explicación & \code{ValueError} con la lista de conductores; nombres flexibles \\
+F11 & \code{exportar\_excel} y \code{tabla\_tendido} fallaban en casos raros & Temperaturas comprobadas, extensión \code{.xlsx}, desnivel en el Excel \\
+F12 & Temperatura de flecha máxima fija & Nuevo dato \code{Linea.temperatura\_maxima} \\
+D2 & Con desnivel $<1$\,m se sumaba $p\,|d|/2$ igualmente & Por debajo de 1\,m el vano se calcula del todo a nivel \\
+\bottomrule
+\end{longtable}
+
+\textbf{No se han tocado} D1, D3 y D4, porque son dudas de reglamento que hay que preguntar al profesor (sección~\ref{sec:pendiente}).
+
+% =============================================================================
+\section{\texorpdfstring{Idea clave: datos que se calculan al consultarlos (\code{@property})}{Idea clave: datos que se calculan al consultarlos (@property)}}
+\label{sec:property}
+
+Varios arreglos (F5, F6 y parte de F9) se basan en la misma idea, así que conviene explicarla primero.
+
+Antes, los datos que se deducen de otros se calculaban \textbf{una sola vez}, en \code{\_\_post\_init\_\_}, y se guardaban:
+
+\begin{lstlisting}
+def __post_init__(self):
+    self.Zona = "A" if self.alt < 500 else ("B" if self.alt <= 1000 else "C")
+\end{lstlisting}
+
+Si después hacías \code{linea.alt = 1200}, \code{linea.Zona} seguía valiendo lo que valía al crearla. Ahora son \textbf{propiedades}: métodos que se usan como si fueran atributos (sin paréntesis) y que se calculan \textbf{cada vez} que se consultan:
+
+\begin{lstlisting}
+@property
+def Zona(self) -> str:
+    "Zona según la altitud: A (< 500 m), B (500-1000 m) o C (> 1000 m)"
+    return "A" if self.alt < 500 else ("B" if self.alt <= 1000 else "C")
+\end{lstlisting}
+
+Desde fuera se usa igual que antes (\code{linea.Zona}), pero ya no se puede quedar desactualizado. El cálculo es tan sencillo que no se nota en el tiempo de ejecución.
+
+La otra mitad de la idea es el método \textbf{\code{validar()}}: cada clase tiene uno que comprueba sus datos. Se llama al crear el objeto y \textbf{otra vez antes de cada cálculo} (\code{resolver()} y \code{tabla\_tendido()} llaman a \code{calculoMecanico.validar()}, que a su vez valida la línea y el conductor). Así, si cambias un dato por uno imposible después de crear el objeto, el error salta al calcular.
+
+\begin{caja}[title=Por qué no \code{frozen=True}]{nota}
+La revisión proponía también hacer las clases inmutables con \code{@dataclass(frozen=True)}. Se ha descartado porque \code{resolver()} guarda \code{self.resultados} y \code{CalculoApoyos} lo usa, y con \code{frozen} habría que hacerlo con \code{object.\_\_setattr\_\_}, que es más difícil de leer. Con propiedades, además, se puede seguir cambiando un dato y recalcular.
+\end{caja}
+
+% =============================================================================
+\section{Fallos de cálculo}
+
+\subsection{F1 y F4: poner una hipótesis en su límite y detectar vanos inviables}
+
+\noindent\textbf{Dónde:} \code{\_Tmax\_minima} (l.~595, nuevo) y \code{\_T0\_desde\_Tmax} (l.~607).\par\medskip
+
+\antes{\code{\_T0\_desde\_Tmax} despejaba $T_0$ siempre con la fórmula de la \textbf{parábola}, pero \code{\_Tmax} usa la \textbf{catenaria} con vanos de más de 500\,m. Al no ser una la inversa de la otra, la hipótesis que debía quedar en su límite lo superaba (LA\,56, vano 800\,m: hielo con 546,66\,daN y límite de 543,00\,daN). Además, si el límite no se podía alcanzar, la raíz cuadrada recibía un número negativo (\code{math domain error}) o, con la catenaria, salía un resultado que incumplía el límite sin avisar.}
+
+\ahora{Se hace en dos pasos.}
+
+\textbf{1. ¿Se puede cumplir el límite?} La tensión máxima en función de $T_0$ primero baja y luego sube (con $T_0$ pequeña la flecha se dispara), así que tiene un \textbf{mínimo}. El nuevo método \code{\_Tmax\_minima} lo calcula de forma exacta:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & $T_0$ en el mínimo & $T_{max}$ mínima \\
+\midrule
+Parábola  & $\dfrac{b\,p}{2\sqrt2}$ & $\dfrac{b\,p}{\sqrt2} + \dfrac{p\,|d|}{2}$ \\[1em]
+Catenaria & $p\,h^*$, con $h^* = \dfrac{b}{2u^*}$ & $p\,h^*\cosh u^* + \dfrac{p\,|d|}{2}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La de la parábola sale de derivar $T_{max} = T_0 + \frac{b^2p^2}{8T_0} + \frac{p|d|}{2}$ e igualar a cero. La de la catenaria, de escribir $T_{max} = p\,h\cosh\frac{b}{2h} + \frac{p|d|}{2}$ (porque $T_0 + p\,f = p\,h\cosh\frac{b}{2h}$) y derivar respecto de $h$: el mínimo está en $u\tanh u = 1$, con $u = b/2h$, cuya solución es $u^* = 1{,}19968$ (constante \code{U\_CATENARIA}).
+
+Si el límite es menor que esa $T_{max}$ mínima, \textbf{ninguna tensión lo cumple} y se lanza un error claro:
+
+\begin{lstlisting}
+at.calculoMecanico(at.Conductor("LA 30"), at.Linea(Un=20, alt=1200),
+                   vano=350, desnivel=150).resolver()
+# ValueError: Vano inviable con el LA 30: en hielo la tensión máxima nunca
+# baja de 367.6 daN y el límite es 324.7 daN. Reduce el vano o el desnivel,
+# o usa un conductor más resistente
+\end{lstlisting}
+
+\textbf{2. Calcular $T_0$.} Con la parábola se sigue usando la fórmula despejada del profesor (por eso los vanos de hasta 500\,m dan exactamente lo mismo que antes). Con la catenaria no se puede despejar, así que se busca por \textbf{bisección} en la rama de tensiones altas, entre el $T_0$ del mínimo y $T_{max}$ (como $T_{max} > T_0$, la solución está seguro en ese intervalo):
+
+\begin{lstlisting}
+# Catenaria: bisección en la rama de tensiones altas, entre T_min y Tmax
+bajo, alto = T_min, Tmax
+for _ in range(200):
+    medio = (bajo + alto) / 2
+    if self._Tmax(medio, p_t) < Tmax:
+        bajo = medio
+    else:
+        alto = medio
+    if alto - bajo <= 1e-12 * alto:
+        break
+return (bajo + alto) / 2
+\end{lstlisting}
+
+La bisección usa la \textbf{misma} \code{\_Tmax} que se usa después, así que las dos funciones son inversas exactas: ahora el LA\,56 con 800\,m queda con el hielo en 543,00\,daN, justo en su límite. Por si acaso, \code{\_flecha\_exacta} devuelve \code{math.inf} si $\cosh$ se desbordase (tensiones minúsculas), en vez de dar un \code{OverflowError}.
+
+% -----------------------------------------------------------------------------
+\subsection{F2: la flecha ya no salta en 500\,m}
+
+\noindent\textbf{Dónde:} \code{\_flecha\_exacta} (l.~640).\par\medskip
+
+\antes{La parábola usaba el vano real $b=\sqrt{a^2+d^2}$, pero la catenaria usaba el vano proyectado $a$. Con 200\,m de desnivel, la flecha máxima del LA\,180 pasaba de 28,36\,m a 24,53\,m al mover el vano 2\,mm (de 499,999 a 500,001\,m): un $-13{,}5$\,\%.}
+
+\ahora{La catenaria usa también $b$, con la misma idea que el método del profesor para la parábola: el vano desnivelado se calcula como un vano a nivel de longitud $b$ con la tensión $T_m$.}
+
+\begin{lstlisting}
+h = T / p_t              # parámetro de la catenaria [m]
+u = self._b / (2 * h)    # antes: self.vano / (2 * h)
+return h * (math.cosh(u) - 1)
+\end{lstlisting}
+
+En el mismo ejemplo, la flecha pasa ahora de 28,36 a 28,47\,m (+0,38\,\%). Ese pequeño salto es la diferencia normal entre la parábola y la catenaria, y ya existía (y sigue igual) en los vanos a nivel: entre +0,3 y +0,7\,\% según el conductor.
+
+% -----------------------------------------------------------------------------
+\subsection{F3: la búsqueda de la dominante comprueba que ha convergido}
+
+\noindent\textbf{Dónde:} \code{\_hipotesis\_dominante} (l.~736).\par\medskip
+
+\antes{El bucle daba una vuelta por hipótesis. En la última vuelta reiniciaba desde la hipótesis que más se pasaba y la devolvía \textbf{sin comprobarla}.}
+
+\ahora{Se da una vuelta más, para que el último reinicio también se compruebe, y si aun así no se encuentra la dominante, se lanza un error en lugar de devolver un resultado que incumple:}
+
+\begin{lstlisting}
+# Una vuelta por hipótesis y una más: así también se comprueba el último reinicio
+peor_ratio, peor = math.inf, limitantes[0]
+for _ in range(len(limitantes) + 1):
+    ...                                      # igual que antes
+    if peor_ratio <= 1 + 1e-6:
+        return partida
+    partida = self._estado_inicial(peor)
+
+raise RuntimeError(f"No se ha encontrado la hipótesis que manda: {peor[0]} queda "
+                   f"al {100 * peor_ratio:.2f} % de su límite")
+\end{lstlisting}
+
+Con el arreglo de F1 el bucle siempre converge (no ha fallado en ninguno de los miles de casos probados), así que este error no debería verse nunca: es una red de seguridad. El test lo comprueba forzando que todas las hipótesis se pasen.
+
+% -----------------------------------------------------------------------------
+\subsection{D2: por debajo de 1\,m de desnivel, el vano se calcula a nivel}
+
+\noindent\textbf{Dónde:} propiedades \code{\_d} y \code{\_b} (l.~561--570), usadas en \code{\_Tmax}, \code{\_flecha\_aprox}, \code{\_flecha\_exacta}, \code{\_T0\_desde\_Tmax} y \code{\_Tmax\_minima}.\par\medskip
+
+\antes{Con un desnivel menor que \code{DESNIVEL\_MINIMO} (1\,m), el EDS y el CHS se comprobaban como a nivel, pero las fórmulas seguían sumando $p\,|d|/2$ y usando $b$. No era del todo coherente con el umbral.}
+
+\ahora{Las fórmulas usan dos propiedades nuevas: \code{\_d}, que vale $|d|$ si el desnivel llega a 1\,m y 0 si no, y \code{\_b} $=\sqrt{a^2 + \text{\_d}^2}$. Así, por debajo de 1\,m el vano es \textbf{exactamente} un vano a nivel, como acordamos (``un desnivel de 1\,cm es sin desnivel''). El atributo público \code{vano\_real} sigue siendo el geométrico, $\sqrt{a^2+d^2}$.}
+
+El cambio en los resultados es muy pequeño: como mucho un 0,27\,\% en los 210 casos probados con 0,5\,m de desnivel.
+
+% =============================================================================
+\section{Datos que se quedaban desactualizados (F5 y F6)}
+
+\noindent\textbf{Dónde:} propiedades de \code{Conductor} (l.~237--290), \code{Linea} (l.~444--484) y \code{calculoMecanico} (l.~551--570 y 765), y \code{flecha\_maxima} (l.~841).\par\medskip
+
+\antes{Todo lo deducido se calculaba al crear el objeto, y \code{flecha\_maxima} reutilizaba \code{self.resultados} si ya existía (con \code{hasattr}):}
+
+\begin{lstlisting}
+c = at.calculoMecanico(cable, L, vano=170)
+c.flecha_maxima          # 5.257 m
+c.vano = 300
+c.flecha_maxima          # 5.257 m   (debería ser 15.973 m)
+\end{lstlisting}
+
+\ahora{Con la idea de la sección~\ref{sec:property}, estos datos son propiedades:}
+
+\begin{center}
+\begin{tabular}{lp{10cm}}
+\toprule
+\textbf{Clase} & \textbf{Propiedades (antes eran atributos fijos)} \\
+\midrule
+\code{Conductor}       & \code{datos}, \code{p}, \code{d}, \code{S}, \code{rotura}, \code{E}, \code{alfa} \\
+\code{Linea}           & \code{Zona}, \code{categoria}, \code{v\_ref}, \code{v\_excepcional}, \code{coef}, \code{limite\_eds} y la nueva \code{t\_flecha\_maxima} \\
+\code{calculoMecanico} & \code{vano\_real}, \code{con\_desnivel}, \code{dominante} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Detalles:
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{flecha\_maxima} llama siempre a \code{resolver()}, así que nunca usa resultados viejos.
+  \item \code{dominante} ya no hace falta pedirlo después de \code{resolver()}: se calcula al consultarlo.
+  \item En \code{Conductor}, leer el CSV sí cuesta algo, así que \code{datos} \textbf{solo lo vuelve a leer si cambia el conductor o el archivo}. Para eso guarda en \code{self.\_clave} con qué datos se leyó la última vez.
+  \item \code{self.resultados} se sigue guardando en \code{resolver()}, porque \code{CalculoApoyos} lo usa. Es la tabla del último cálculo.
+\end{itemize}
+
+% =============================================================================
+\section{Validación de datos y mensajes de error}
+
+\subsection{F7 y F8: datos imposibles}
+
+\noindent\textbf{Dónde:} \code{Conductor.validar} (l.~220), \code{Linea.validar} (l.~404) y \code{calculoMecanico.validar} (l.~538).\par\medskip
+
+Ahora estos datos dan un \code{ValueError} que dice qué está mal:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Dato} & \textbf{Condición} \\
+\midrule
+\code{vano}                  & $>0$ \\
+\code{desnivel}              & un número (no \code{nan} ni infinito) \\
+\code{Un}                    & $>0$ \\
+\code{alt}                   & $\ge 0$ \\
+\code{Vv}                    & $>0$ (si se da) \\
+\code{coef\_seguridad}       & $>0$ (si se da) \\
+\code{E\_dato}               & $>0$ (si se da) \\
+\code{eds}, \code{chs}, \code{alfa\_dato} & como antes \\
+\code{temperatura\_maxima}   & $\ge$ 50\,ºC (85\,ºC en categoría especial) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Las comprobaciones se escriben como \code{not self.Un > 0} en lugar de \code{self.Un <= 0}. Parece lo mismo, pero no lo es con \code{nan}: cualquier comparación con \code{nan} da \code{False}, así que \code{nan <= 0} no detectaría el error y \code{not nan > 0} sí.
+
+Para \textbf{F8}, un \code{coef\_seguridad} menor que 2,5 (constante \code{COEF\_SEGURIDAD\_MINIMO}) \textbf{no} da error, porque algún enunciado podría usarlo, pero sí un aviso:
+
+\begin{lstlisting}
+at.Linea(Un=20, alt=300, coef_seguridad=2.0)
+# UserWarning: coef_seguridad=2 es menor que el mínimo del reglamento (2.5, ITC-LAT-07 3.2.1)
+\end{lstlisting}
+
+% -----------------------------------------------------------------------------
+\subsection{F9 y F10: buscar el conductor y conductores homogéneos}
+
+\noindent\textbf{Dónde:} función \code{\_leer\_conductor} (l.~184, nueva), \code{Conductor.homogeneo} (l.~246) y \code{\_propiedades\_tipicas} (l.~270).\par\medskip
+
+\antes{\code{Conductor("LA 999")} daba \code{KeyError: 'LA 999'}, y había que escribir el nombre exacto (\code{"LA 280 HAWK"}, no \code{"LA 280"}). Con \code{conductores\_AL1.csv} y \code{conductores\_AL2.csv} daba \code{KeyError: 'seccion\_total\_mm2'}.}
+
+\ahora{La búsqueda del conductor está en una función aparte, \code{\_leer\_conductor}, que:}
+\begin{itemize}[leftmargin=1.5em]
+  \item no distingue mayúsculas de minúsculas e ignora los espacios de más: \code{"la 56"}, \code{"LA~~56"} y \code{" LA 56 "} valen;
+  \item si no encuentra el nombre exacto, admite el nombre sin la palabra final si solo hay uno que encaje: \code{"LA 280"} $\rightarrow$ \code{LA 280 HAWK}. El nombre completo queda en \code{cable.nombre};
+  \item si no lo encuentra, da un \code{ValueError} con la lista de los que hay:
+\end{itemize}
+\begin{lstlisting}
+at.Conductor("LA 999")
+# ValueError: Conductor 'LA 999' no encontrado en conductores_AL1_ST1A.csv.
+# Disponibles: LA 30, LA 56, LA 78, LA 110, LA 145, LA 180, LA 280 HAWK, ...
+\end{lstlisting}
+
+Para los \textbf{conductores homogéneos} (de un solo material), la propiedad \code{homogeneo} detecta que la tabla no tiene columna de alambres de acero, y entonces:
+\begin{itemize}[leftmargin=1.5em]
+  \item la sección se toma de la columna \code{seccion\_mm2};
+  \item como el temario no da E ni $\alpha$ típicos para ellos, hay que darlos con \code{E\_dato} y \code{alfa\_dato}, y si no, el error lo dice;
+  \item \code{resumen()} muestra la composición como ``7 alambres (homogéneo)'';
+  \item la sobrecarga de hielo + viento (\code{p\_total\_hielo\_viento}) da un error claro, porque esas tablas no tienen el diámetro del manguito.
+\end{itemize}
+
+\begin{lstlisting}
+ruta = str(at.CARPETA_CONDUCTORES / "conductores_AL1.csv")
+cable = at.Conductor("L 56", archivo=ruta, E_dato=6000, alfa_dato=23e-6)
+\end{lstlisting}
+
+% -----------------------------------------------------------------------------
+\subsection{\texorpdfstring{F11: \code{tabla\_tendido} y \code{exportar\_excel}}{F11: tabla_tendido y exportar_excel}}
+
+\noindent\textbf{Dónde:} función \code{\_lista\_de\_temperaturas} (l.~509, nueva), \code{tabla\_tendido} (l.~825) y \code{exportar\_excel} (l.~853).\par\medskip
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Temperaturas:} \code{\_lista\_de\_temperaturas} admite una temperatura suelta (\code{tabla\_tendido(15)}) o una lista o \code{range}. Con algo que no sean números (\code{None}, \code{"15"}, \code{[0, "a"]}) da un \code{TypeError} que explica qué se espera. \code{True} y \code{False} se rechazan aparte, porque en Python también son números enteros.
+  \item \textbf{Tabla vacía:} el ancho de columna se calculaba con \code{max(len(col), *valores)}, que con una tabla vacía queda como \code{max(número)} y falla. Ahora es \code{max([len(col), *valores])}, con una lista, que funciona siempre.
+  \item \textbf{Extensión:} si la ruta no tiene extensión se le añade \code{.xlsx}; si tiene otra (\code{.xls}, \code{.csv}\ldots) da un error, en vez de escribir un \code{.xlsx} con un nombre engañoso.
+  \item \textbf{Desnivel:} la hoja ``Datos'' incluye ahora las filas \emph{Desnivel} y \emph{Vano real b}, así que un cálculo a desnivel se distingue de uno a nivel.
+\end{itemize}
+
+% =============================================================================
+\section{F12: temperatura de la flecha máxima}
+
+\noindent\textbf{Dónde:} \code{Linea.temperatura\_maxima} (dato nuevo), \code{Linea.t\_flecha\_maxima} (l.~480) y \code{\_hipotesis\_resultado}.\par\medskip
+
+\antes{La hipótesis de flecha máxima por temperatura se calculaba siempre a 50\,ºC (85\,ºC en categoría especial), aunque el reglamento lo da como \textbf{mínimo}.}
+
+\ahora{\code{Linea} tiene un dato nuevo y opcional:}
+
+\begin{lstlisting}
+linea = at.Linea(Un=20, alt=600, temperatura_maxima=75)
+# la hipótesis se llama "flecha temperatura 75ºC"
+\end{lstlisting}
+
+Si no se da, se usa el mínimo del reglamento (diccionario \code{T\_FLECHA\_MAXIMA}), así que todo sigue igual que antes. Si se da uno menor que el mínimo, error. \code{Linea.resumen()} muestra también esta temperatura.
+
+% =============================================================================
+\section{Efecto en los resultados}
+
+Antes de tocar nada se guardaron los resultados de 1\,680 casos (7 conductores, 6 líneas en las tres zonas y las dos categorías, 8 vanos de 80 a 800\,m y 5 desniveles de 0 a 120\,m) y se compararon con los de después:
+
+\begin{center}
+\begin{tabular}{lrp{8.2cm}}
+\toprule
+\textbf{Grupo} & \textbf{Casos} & \textbf{Resultado} \\
+\midrule
+Vano $\le 500$\,m      & 840 & \textbf{Idénticos} (diferencia 0). Los 7 que ya eran inviables dan ahora un error claro en vez de \code{math domain error}. \\
+Desnivel $<1$\,m (D2)  & 210 & Cambian como mucho un 0,27\,\%. \\
+Vano $> 500$\,m        & 630 & Cambian (F1 y F2): $T_{max}$ hasta un 2,4\,\%. 19 casos que antes daban un resultado que incumplía algún límite son ahora inviables (error claro). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+En los vanos de más de 500\,m la \textbf{flecha} puede cambiar bastante más (hasta un 18\,\% con 40\,m de desnivel): son casos cerca del límite de lo posible, donde la tensión es baja y la flecha muy sensible, y casos con desnivel, donde antes la catenaria ignoraba el desnivel (F2).
+
+Además se comprobó un barrido de 3\,528 casos (vanos de 50 a 1\,000\,m y desniveles de 0 a 200\,m): \textbf{ninguna hipótesis supera su límite}, la dominante queda siempre en su límite (error menor que $10^{-6}$) y los 355 casos inviables dan el error claro.
+
+% =============================================================================
+\section{Cambios que pueden afectar a tu código}
+
+Casi todo se usa igual que antes. Lo que cambia:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Un conductor que no existe da \code{ValueError} en vez de \code{KeyError}.
+  \item Un vano inviable da \code{ValueError} (``Vano inviable\ldots''). Antes daba \code{math domain error} o un resultado incorrecto.
+  \item \code{dominante} existe sin llamar antes a \code{resolver()}.
+  \item \code{exportar\_excel} devuelve siempre la ruta con \code{.xlsx}, y no admite otras extensiones.
+  \item Con los CSV homogéneos hay que dar \code{E\_dato} y \code{alfa\_dato}.
+  \item Las propiedades no se pueden asignar: \code{linea.Zona = "C"} da error. Se cambia el dato del que salen (\code{linea.alt = 1200}).
+  \item Constantes nuevas: \code{T\_FLECHA\_MAXIMA}, \code{COEF\_SEGURIDAD\_MINIMO}, \code{VANO\_CATENARIA} (500\,m, antes era un número suelto en el código) y \code{U\_CATENARIA}.
+\end{itemize}
+
+Tu \code{ejemplos.py} funciona sin cambios.
+
+% =============================================================================
+\section{Tests}
+
+Pasan los \textbf{267 tests} (antes de estos arreglos eran 217). Los nuevos:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{tests/test\_revision.py} (archivo nuevo): un test por fallo, con el nombre del fallo delante (\code{test\_F1\_\ldots}, \code{test\_F2\_\ldots}). Cada uno reproduce el caso del informe y comprueba que ya no ocurre: la dominante en su límite con catenaria, la flecha continua en 500\,m, el error de F3, los vanos inviables, cambiar el vano o la línea después de crearlos, los datos imposibles, el aviso del coeficiente, las temperaturas raras, el Excel sin temperaturas y con desnivel, la temperatura máxima y que un desnivel menor de 1\,m da exactamente lo mismo que a nivel.
+  \item \code{tests/test\_conductores.py}: conductor inexistente (con la lista), nombres flexibles, nombre sin la palabra final, conductores homogéneos de AL1 y AL2, E no positivo y cambiar el conductor después de crearlo.
+\end{itemize}
+
+Las tablas de referencia de los tests de regresión (\code{tests/referencias/}) \textbf{no ha hecho falta regenerarlas}: ninguno de sus cuatro casos cambia, ni siquiera el de catenaria (GULL, 600\,m), porque en él manda el EDS, que se comprueba con $T_0$ y no usa la inversión de F1.
+
+Pyright no da ningún error en \code{alta\_tension.py}.
+
+% =============================================================================
+\section{Lo que queda pendiente}
+\label{sec:pendiente}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{D1, D3 y D4}: dudas de reglamento (manguito de hielo + viento en zona C, cuándo usar el coeficiente 3 y sobrecargas de hielo mayores). Hay que preguntar al profesor antes de cambiar nada.
+  \item \textbf{Ecuación de cambio de condiciones con vanos de más de 500\,m}: sigue usando la parábola, como en la asignatura. Es una aproximación, pero es el método del curso.
+  \item \textbf{\code{CalculoApoyos}}: no era parte de la revisión. Sus cantones y tensiones se siguen calculando al crearlo, así que si se cambian sus datos después hay que crear otro.
+  \item El informe anterior (\code{revision\_calculoMecanico.pdf}) usa todavía \code{c.\_p\_hielo()} en un ejemplo; con la librería actual sería \code{c.conductor.p\_total\_hielo("B")}.
+\end{itemize}
+
+\end{document}

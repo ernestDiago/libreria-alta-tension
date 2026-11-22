@@ -55,14 +55,7 @@ def test_tema9_ejemplo2_tension():
     assert calc._Tmax(277.8, p) == pytest.approx(278, abs=0.05)
 
 
-def test_tema9_ejemplo3_sobrecargas():
-    "LA 78 a 700 m de altitud (zona B), línea de 2ª categoría"
-    calc = at.calculoMecanico(at.Conductor("LA 78"), at.Linea(Un=66, alt=700), vano=100)
-    assert calc._pv() == pytest.approx(0.678, abs=0.001)          # a) viento
-    assert calc._p_viento() == pytest.approx(0.728, abs=0.001)
-    assert calc._p_hielo() == pytest.approx(0.871, abs=0.001)     # b) hielo
-    assert calc._pv(160) == pytest.approx(1.205, abs=0.001)       # c) viento de 160 km/h
-    assert calc._p_viento(160) == pytest.approx(1.234, abs=0.001)
+# El ejemplo 3 del Tema 9 (sobrecargas) está en test_conductores.py
 
 
 # --- Ejemplo de clase "Cálculo mecánico de un vano a nivel"

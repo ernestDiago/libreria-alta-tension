@@ -16,7 +16,7 @@ Uso:
     linea.pi()
 
     cable = at.Conductor("LA 56")
-    calc = at.calculoMecanico(cable, Un=20, alt=600, vano=170)
+    calc = at.calculoMecanico(cable, at.Linea(Un=20, alt=600), vano=170)
     calc.resolver()
 """
 
@@ -24,6 +24,8 @@ import cmath
 import itertools
 import math
 import unicodedata
+import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -94,13 +96,17 @@ class Modelo:
         I0 = C * self.Vf + D * self.Ic
         S0 = 3 * V0 * I0.conjugate()
         U0 = math.sqrt(3) * abs(V0)
+        I_vacio = C * self.Vf  # corriente que absorbe la línea en vacío (por su capacidad)
 
         return {
             "Tensión de línea en el origen [kV]": U0 * 10**-3,
             "Intensidad en el origen [A]": abs(I0),
             "Potencia activa en el origen [MW]": S0.real * 10**-6,
             "Pérdidas de potencia [MW]": (S0.real - self.Pf) * 10**-6,
+            "Pérdidas respecto a P0 [%]": 100 * (S0.real - self.Pf) / S0.real,
             "Caída de tensión aritmética [kV]": (U0 - self.Uf) * 10**-3,
+            "Caída de tensión respecto a Uf [%]": 100 * (U0 - self.Uf) / self.Uf,
+            "Intensidad de vacío [A]": abs(I_vacio),
         }
 
     def inductivo(self):
@@ -168,7 +174,32 @@ T_VIENTO = {
 }  # tracción máxima viento (y viento excepcional / desviación cadena)
 T_HIELO = {"B": -15, "C": -20}  # tracción máxima hielo (en zona A no hay hielo)
 T_FLECHA_MIN = {"A": -5, "B": -15, "C": -20}  # flecha mínima
+T_FLECHA_MAXIMA = {"normal": 50, "especial": 85}  # mínimo de la hipótesis de temperatura
 DESNIVEL_MINIMO = 1  # Desnivel entre torres para considerar el calculo con desnivel
+COEF_SEGURIDAD_MINIMO = 2.5  # ITC-LAT-07 3.2.1: Tmax <= rotura / 2,5
+VANO_CATENARIA = 500  # A partir de este vano [m] la flecha se calcula con la catenaria
+U_CATENARIA = 1.1996786402577337  # solución de u·tanh(u) = 1 (mínimo de la Tmax con la catenaria)
+
+
+def _leer_conductor(nombre: str, archivo) -> tuple[str, dict]:
+    """Busca un conductor en el CSV y devuelve (nombre de la tabla, datos).
+    Da igual escribirlo en mayúsculas o minúsculas, con espacios de más o sin el nombre
+    final ("LA 280" -> "LA 280 HAWK")"""
+    tabla = pd.read_csv(archivo, index_col="codigo_antiguo")
+
+    def limpio(texto):
+        return " ".join(str(texto).split()).upper()
+
+    buscado = limpio(nombre)
+    candidatos = [n for n in tabla.index if limpio(n) == buscado]
+    if not candidatos:  # "LA 280" -> "LA 280 HAWK", si solo hay uno
+        candidatos = [n for n in tabla.index if limpio(n).startswith(buscado + " ")]
+    if len(candidatos) != 1:
+        raise ValueError(
+            f"Conductor {nombre!r} no encontrado en {Path(archivo).name}. "
+            f"Disponibles: {', '.join(tabla.index)}"
+        )
+    return candidatos[0], tabla.loc[candidatos[0]].to_dict()
 
 
 @dataclass
@@ -183,29 +214,165 @@ class Conductor:
     )
 
     def __post_init__(self):
+        self._clave = None  # (conductor, archivo) con que se leyeron los datos
+        self.validar()
+
+    def validar(self):
+        "Comprueba los datos. Se llama al crear el conductor y antes de cada cálculo mecánico"
         # α de un conductor es del orden de 10⁻⁵ 1/ºC: 17,8·10⁻⁶ -> 17.8e-6
         if self.alfa_dato is not None and not 0 < self.alfa_dato < 1e-3:
             raise ValueError(
                 f"alfa_dato={self.alfa_dato}: fuera de rango. "
                 "17,8·10⁻⁶ ºC⁻¹ se escribe 17.8e-6"
             )
+        if self.E_dato is not None and not self.E_dato > 0:
+            raise ValueError(f"E_dato={self.E_dato}: el módulo de elasticidad tiene que ser positivo [daN/mm²]")
+        _ = self.E, self.alfa  # en los conductores homogéneos, comprueba que se han dado
 
-        tabla = pd.read_csv(self.archivo, index_col="codigo_antiguo")
-        self.datos: dict = tabla.loc[self.conductor].to_dict()
+    #  DATOS DE LA TABLA
+    # Son propiedades: se calculan cada vez que se consultan, así que si se cambia el
+    # conductor, el archivo, E_dato o alfa_dato, nunca se quedan desactualizados.
 
-        self.p = self.datos["masa_kg_km"] * 9.81 / 10_000  # daN/m
-        self.d = self.datos["d_conductor_mm"]  # mm
-        self.S = self.datos["seccion_total_mm2"]  # mm²
-        self.rotura = self.datos["carga_rotura_kN"] * 100  # daN
+    @property
+    def datos(self) -> dict:
+        "Fila del CSV del conductor (se vuelve a leer solo si cambia el conductor o el archivo)"
+        clave = (self.conductor, self.archivo)
+        if self._clave != clave:
+            self.nombre, self._datos = _leer_conductor(self.conductor, self.archivo)
+            self._clave = clave
+        return self._datos
 
-        # E y α: los del enunciado si se dan, si no los típicos según composición
-        composicion = (
-            int(self.datos["n_alambres_al"]),
-            int(self.datos["n_alambres_acero"]),
-        )
-        E_tabla, alfa_tabla = PROPIEDADES[composicion]
-        self.E: float = self.E_dato if self.E_dato is not None else E_tabla
-        self.alfa: float = self.alfa_dato if self.alfa_dato is not None else alfa_tabla
+    @property
+    def homogeneo(self) -> bool:
+        "True en los conductores de un solo material (AL1, AL2), que no tienen alma de acero"
+        return "n_alambres_acero" not in self.datos
+
+    @property
+    def p(self) -> float:
+        "Peso propio [daN/m]"
+        return self.datos["masa_kg_km"] * 9.81 / 10_000
+
+    @property
+    def d(self) -> float:
+        "Diámetro [mm]"
+        return self.datos["d_conductor_mm"]
+
+    @property
+    def S(self) -> float:
+        "Sección total [mm²]"
+        return self.datos["seccion_mm2" if self.homogeneo else "seccion_total_mm2"]
+
+    @property
+    def rotura(self) -> float:
+        "Carga de rotura [daN]"
+        return self.datos["carga_rotura_kN"] * 100
+
+    def _propiedades_tipicas(self) -> tuple[float, float]:
+        "(E, α) típicos según la composición. Los conductores homogéneos no tienen"
+        if self.homogeneo:
+            raise ValueError(
+                f"El conductor {self.conductor} es homogéneo (sin acero): no hay E ni α típicos "
+                "en el temario, hay que darlos con E_dato y alfa_dato"
+            )
+        composicion = (int(self.datos["n_alambres_al"]), int(self.datos["n_alambres_acero"]))
+        return PROPIEDADES[composicion]
+
+    @property
+    def E(self) -> float:
+        "Módulo de elasticidad [daN/mm²]: el del enunciado si se da, si no el típico"
+        return self.E_dato if self.E_dato is not None else self._propiedades_tipicas()[0]
+
+    @property
+    def alfa(self) -> float:
+        "Coeficiente de dilatación [1/ºC]: el del enunciado si se da, si no el típico"
+        return self.alfa_dato if self.alfa_dato is not None else self._propiedades_tipicas()[1]
+
+    #  SOBRECARGAS (ITC-LAT-07 3.1.2 y 3.1.3)
+    # Solo dependen del cable. La velocidad del viento y la zona las decide la línea,
+    # por eso se pasan como parámetro.
+
+    def presion_viento(self, v: float = 120, d: float | None = None) -> float:
+        "Presión del viento q [daN/m²] a v km/h sobre un cable de diámetro d [mm] (por defecto el del conductor)"
+        d = self.d if d is None else d
+        q_120 = 60 if d <= 16 else 50
+        return q_120 * (v / 120) ** 2
+
+    def sobrecarga_viento(self, v: float = 120) -> float:
+        "Sobrecarga de viento p_v [daN/m] a v km/h, sin el peso propio"
+        return self.presion_viento(v) * self.d / 1000
+
+    def p_total_viento(self, v: float = 120, factor: float = 1.0) -> float:
+        """Peso total con viento p_t = √(p² + p_v²) [daN/m] a v km/h.
+        factor multiplica la presión: 0.5 es la mitad de presión de la desviación de cadenas"""
+        pv = factor * self.sobrecarga_viento(v)
+        return math.hypot(self.p, pv)
+
+    def sobrecarga_hielo(self, zona: str) -> float:
+        "Sobrecarga de hielo p_h [daN/m], sin el peso propio: 0 en zona A, 0,18·√d en B y 0,36·√d en C"
+        k = {"A": 0, "B": 0.18, "C": 0.36}
+        if zona not in k:
+            raise ValueError(f"Zona '{zona}' desconocida: tiene que ser 'A', 'B' o 'C'")
+        return k[zona] * self.d**0.5
+
+    def p_total_hielo(self, zona: str) -> float:
+        "Peso total con hielo p_t = p + p_h [daN/m] (en zona A, solo el peso propio)"
+        return self.p + self.sobrecarga_hielo(zona)
+
+    def p_total_hielo_viento(self, zona: str) -> float:
+        """Peso total con hielo + viento a 60 km/h [daN/m]: √((p + p_h)² + p_v'²), con p_v'
+        calculado sobre el diámetro D del manguito de hielo. Solo zonas B y C."""
+        if zona not in ("B", "C"):
+            raise ValueError(
+                f"La sobrecarga de hielo + viento solo se aplica en zonas B y C, no en '{zona}'"
+            )
+        columna = f"d_manguito_hielo_{zona}_mm"
+        if columna not in self.datos:
+            raise ValueError(
+                f"La tabla de {self.conductor} no tiene el diámetro del manguito de hielo ({columna})"
+            )
+        D = self.datos[columna]
+        pv_prima = self.presion_viento(60, D) * D / 1000
+        return math.hypot(self.p_total_hielo(zona), pv_prima)
+
+    def resumen(self):
+        "Texto con las características del conductor, ordenadas por grupos"
+        d = self.datos
+        origen_E = "del enunciado" if self.E_dato is not None else "típico según composición"
+        origen_alfa = "del enunciado" if self.alfa_dato is not None else "típico según composición"
+
+        if self.homogeneo:  # AL1 o AL2: un solo material
+            composicion = f"{d['n_alambres']:g} alambres (homogéneo)"
+            seccion = f"{self.S:.1f} mm²"
+        else:
+            composicion = f"{d['n_alambres_al']:g} + {d['n_alambres_acero']:g} alambres (Al + acero)"
+            seccion = f"{self.S:.1f} mm²  (Al {d['seccion_al_mm2']:.1f} + acero {d['seccion_acero_mm2']:.1f})"
+
+        grupos = {
+            "Características": [
+                ("Composición", composicion),
+                ("Sección", seccion),
+                ("Diámetro", f"{self.d:.2f} mm"),
+                ("Peso propio", f"{self.p:.4f} daN/m  ({d['masa_kg_km']:.1f} kg/km)"),
+                ("Resistencia en c.c.", f"{d['resistencia_cc_ohm_km']:.4f} Ω/km"),
+            ],
+            "Propiedades mecánicas": [
+                ("Carga de rotura", f"{self.rotura:.0f} daN"),
+                ("Módulo de elasticidad", f"{self.E:g} daN/mm²  ({origen_E})"),
+                ("Coef. de dilatación", f"{self.alfa * 1e6:g}·10⁻⁶ 1/ºC  ({origen_alfa})"),
+            ],
+            "Sobrecargas (sin el peso propio)": [
+                ("Hielo zona B / C",
+                 f"{self.sobrecarga_hielo('B'):.3f} / {self.sobrecarga_hielo('C'):.3f} daN/m"),
+                ("Viento 120 / 140 km/h",
+                 f"{self.sobrecarga_viento(120):.3f} / {self.sobrecarga_viento(140):.3f} daN/m"),
+            ],
+        }
+
+        lineas = [f"Conductor {self.nombre} ({d['codigo']})"]
+        for grupo, filas in grupos.items():
+            lineas.append(f"  {grupo}")
+            lineas += [f"    {etiqueta + ':':<24}{valor}" for etiqueta, valor in filas]
+        return "\n".join(lineas)
 
 
 @dataclass
@@ -214,13 +381,35 @@ class Linea:
 
     Un: float  # Tensión nominal de la línea [kV]
     alt: float  # Altitud de la línea [m]
-    Vv: float | None = None  # Viento máximo de la zona [km/h] (si > 120/140 -> viento excepcional)
+    Vv: float | None = (
+        None  # Viento máximo de la zona [km/h] (si > 120/140 -> viento excepcional)
+    )
     antivibradores: bool = False  # Si hay antivibradores el EDS sube del 15 % al 22 %
-    coef_seguridad: float | None = None  # None -> 3 en media tensión (15-20 kV), 2,5 en el resto
-    chs: float | None = 0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
-    eds: float | None = None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 %)
+    coef_seguridad: float | None = (
+        None  # None -> 3 en media tensión (15-20 kV), 2,5 en el resto
+    )
+    chs: float | None = (
+        0.20  # Límite CHS a -5 ºC (fracción de la rotura). None -> no se comprueba
+    )
+    eds: float | None = (
+        None  # Límite EDS a 15 ºC (fracción de la rotura). None -> 15 % (22 %)
+    )
+    temperatura_maxima: float | None = (
+        None  # Temperatura de la flecha máxima [ºC]. None -> 50 ºC (85 ºC en cat. especial)
+    )
 
     def __post_init__(self):
+        self.validar()
+
+    def validar(self):
+        "Comprueba los datos. Se llama al crear la línea y antes de cada cálculo mecánico"
+        # "not x > 0" en vez de "x <= 0" para que también falle con nan
+        if not self.Un > 0:
+            raise ValueError(f"Un={self.Un}: la tensión nominal tiene que ser positiva [kV]")
+        if not self.alt >= 0:
+            raise ValueError(f"alt={self.alt}: la altitud no puede ser negativa [m]")
+        if self.Vv is not None and not self.Vv > 0:
+            raise ValueError(f"Vv={self.Vv}: la velocidad del viento tiene que ser positiva [km/h]")
 
         # Los límites van en tanto por uno: 15 % -> 0.15
         for nombre in ("eds", "chs"):
@@ -230,27 +419,110 @@ class Linea:
                     f"{nombre}={valor}: el límite va en tanto por uno (15 % -> 0.15)"
                 )
 
-        # Límite EDS: el del enunciado si se da, si no el del RLAT
+        if self.coef_seguridad is not None:
+            if not self.coef_seguridad > 0:
+                raise ValueError(f"coef_seguridad={self.coef_seguridad}: tiene que ser positivo")
+            if self.coef_seguridad < COEF_SEGURIDAD_MINIMO:
+                warnings.warn(
+                    f"coef_seguridad={self.coef_seguridad:g} es menor que el mínimo del reglamento "
+                    f"({COEF_SEGURIDAD_MINIMO:g}, ITC-LAT-07 3.2.1)",
+                    stacklevel=3,
+                )
+
+        minimo = T_FLECHA_MAXIMA[self.categoria]
+        if self.temperatura_maxima is not None and not self.temperatura_maxima >= minimo:
+            raise ValueError(
+                f"temperatura_maxima={self.temperatura_maxima}: en categoría {self.categoria} "
+                f"no puede ser menor de {minimo} ºC"
+            )
+
+    #  DATOS DEDUCIDOS
+    # Son propiedades: se calculan cada vez que se consultan, así que si después se cambia
+    # la altitud, la tensión, etc., nunca se quedan desactualizados.
+
+    @property
+    def limite_eds(self) -> float:
+        "Límite EDS (tanto por uno): el del enunciado si se da, si no el del RLAT"
         if self.eds is not None:
-            self.limite_eds = self.eds
-        else:
-            self.limite_eds = 0.22 if self.antivibradores else 0.15
+            return self.eds
+        return 0.22 if self.antivibradores else 0.15
 
-        self.Zona = "A" if self.alt < 500 else ("B" if self.alt <= 1000 else "C")
-        self.categoria = "especial" if self.Un >= 220 else "normal"
+    @property
+    def Zona(self) -> str:
+        "Zona según la altitud: A (< 500 m), B (500-1000 m) o C (> 1000 m)"
+        return "A" if self.alt < 500 else ("B" if self.alt <= 1000 else "C")
 
-        # Viento de referencia del RLAT (siempre) y viento excepcional (solo si el dato de entrada lo supera)
-        self.v_ref = 140 if self.categoria == "especial" else 120
+    @property
+    def categoria(self) -> str:
+        "'especial' desde 220 kV, 'normal' por debajo"
+        return "especial" if self.Un >= 220 else "normal"
+
+    @property
+    def v_ref(self) -> float:
+        "Viento de referencia del RLAT [km/h]"
+        return 140 if self.categoria == "especial" else 120
+
+    @property
+    def v_excepcional(self) -> float | None:
+        "Viento excepcional [km/h]: solo si el dato de entrada supera el de referencia"
         if self.Vv is not None and self.Vv > self.v_ref:
-            self.v_excepcional = self.Vv
-        else:
-            self.v_excepcional = None
+            return self.Vv
+        return None
 
-        # Coeficiente de seguridad: 3 en media tensión (evita la hipótesis de rotura en apoyos)
-        if self.coef_seguridad is None:
-            self.coef = 3 if 15 <= self.Un <= 20 else 2.5
+    @property
+    def coef(self) -> float:
+        "Coeficiente de seguridad: el del enunciado, o 3 en media tensión (15-20 kV) y 2,5 en el resto"
+        if self.coef_seguridad is not None:
+            return self.coef_seguridad
+        return 3 if 15 <= self.Un <= 20 else 2.5  # el 3 evita la hipótesis de rotura en apoyos
+
+    @property
+    def t_flecha_maxima(self) -> float:
+        "Temperatura de la hipótesis de flecha máxima [ºC]: la del enunciado o el mínimo del RLAT"
+        if self.temperatura_maxima is not None:
+            return self.temperatura_maxima
+        return T_FLECHA_MAXIMA[self.categoria]
+
+    def resumen(self):
+        "Texto con las características de la línea según el RLAT"
+        if self.v_excepcional is not None:
+            viento = f"{self.v_ref} km/h (excepcional: {self.v_excepcional} km/h)"
         else:
-            self.coef = self.coef_seguridad
+            viento = f"{self.v_ref} km/h"
+        chs = f"{self.chs:.0%}" if self.chs is not None else "no se comprueba"
+
+        return "\n".join(
+            [
+                f"Línea de {self.Un:g} kV a {self.alt:g} m de altitud",
+                f"  Categoría:          {self.categoria}",
+                f"  Zona:               {self.Zona}",
+                f"  Viento:             {viento}",
+                f"  Antivibradores:     {self.antivibradores}",
+                f"  Coef. de seguridad: {self.coef:g}",
+                f"  Límite EDS (15 ºC): {self.limite_eds:.0%}",
+                f"  Límite CHS (-5 ºC): {chs}",
+                f"  Flecha máxima a:    {self.t_flecha_maxima:g} ºC",
+            ]
+        )
+
+
+def _lista_de_temperaturas(temperaturas) -> list[float]:
+    "Acepta una temperatura suelta (25) o una lista/range de temperaturas [ºC]"
+    error = TypeError(
+        f"temperaturas={temperaturas!r}: tiene que ser una temperatura o una lista "
+        "de temperaturas, p. ej. range(0, 50, 5) o [0, 15, 50]"
+    )
+    if isinstance(temperaturas, bool):  # True/False también son int en Python
+        raise error
+    if isinstance(temperaturas, (int, float)):
+        return [temperaturas]
+    try:
+        lista = list(temperaturas)
+    except TypeError:
+        raise error from None
+    if not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in lista):
+        raise TypeError(f"temperaturas={temperaturas!r}: todas tienen que ser números [ºC]")
+    return lista
 
 
 @dataclass
@@ -261,54 +533,39 @@ class calculoMecanico:
     desnivel: float = 0.0  # Desnivel entre los apoyos del vano [m]
 
     def __post_init__(self):
+        self.validar()
 
-        # Desnivel
-        self.vano_real = math.sqrt(self.vano**2 + self.desnivel**2)
-        self.con_desnivel = abs(self.desnivel) >= DESNIVEL_MINIMO
+    def validar(self):
+        "Comprueba los datos del vano, de la línea y del conductor (al crearlo y antes de calcular)"
+        if not self.vano > 0:
+            raise ValueError(f"vano={self.vano}: tiene que ser mayor que 0 [m]")
+        if not math.isfinite(self.desnivel):
+            raise ValueError(f"desnivel={self.desnivel}: tiene que ser un número [m]")
+        self.linea.validar()
+        self.conductor.validar()
 
-    #  SOBRECARGAS
+    #  DESNIVEL
+    # Son propiedades para que, si se cambia el vano o el desnivel, no se queden viejas.
 
-    def _q(self, v, dmm):
-        "Presión del viento sobre el cable [daN/m²]"
+    @property
+    def vano_real(self) -> float:
+        "Vano real b = √(a² + d²) [m]"
+        return math.hypot(self.vano, self.desnivel)
 
-        if dmm <= 16:
-            return 60 * (v / 120) ** 2
-        return 50 * (v / 120) ** 2
+    @property
+    def con_desnivel(self) -> bool:
+        "Si el desnivel llega a DESNIVEL_MINIMO (por debajo, el vano se calcula a nivel)"
+        return abs(self.desnivel) >= DESNIVEL_MINIMO
 
-    def _pv(self, v=None):
-        "Sobrecarga de viento p_v [daN/m] (por defecto con el viento de referencia)"
-        v = self.linea.v_ref if v is None else v
-        return self.conductor.d / 1000 * self._q(v, self.conductor.d)
+    @property
+    def _d(self) -> float:
+        "|desnivel| que entra en las fórmulas [m]: 0 por debajo de DESNIVEL_MINIMO"
+        return abs(self.desnivel) if self.con_desnivel else 0.0
 
-    def _p_viento(self, v=None):
-        "Peso total con viento p_t [daN/m] (por defecto con el viento de referencia)"
-
-        pv = self._pv(v)
-        return (self.conductor.p**2 + pv**2) ** 0.5
-
-    def _p_viento_mitad(self):
-        "Peso total con la mitad de la presión de viento de 120 km/h (desviación de cadenas)"
-        pv = self._pv(120) / 2
-        return (self.conductor.p**2 + pv**2) ** 0.5
-
-    def _p_hielo(self):
-        "Peso total con hielo [daN/m]; en zona A no hay hielo"
-        if self.linea.Zona == "A":
-            return self.conductor.p
-
-        k = 0.18 if self.linea.Zona == "B" else 0.36
-        return self.conductor.p + k * self.conductor.d**0.5
-
-    def _sobrecarga_conjunta(self):
-        "Peso total con hielo + viento a 60 km/h [daN/m]. Solo zonas B y C."
-        if self.linea.Zona == "A":
-            raise ValueError(
-                "En zona A no se aplica la sobrecarga conjunta de hielo y viento"
-            )
-
-        D = self.conductor.datos[f"d_manguito_hielo_{self.linea.Zona}_mm"]
-        pv_prima = self._q(60, D) * D / 1000
-        return (self._p_hielo() ** 2 + pv_prima**2) ** 0.5
+    @property
+    def _b(self) -> float:
+        "Vano real que entra en las fórmulas [m]: el vano a si el desnivel no llega al mínimo"
+        return math.hypot(self.vano, self._d)
 
     #  ECUACIONES
 
@@ -335,34 +592,67 @@ class calculoMecanico:
         t2 = max(r.real for r in raices if abs(r.imag) < 1e-9 and r.real > 0)
         return t2 * S
 
-    def _T0_desde_Tmax(self, Tmax, p_t):
-        "T0 [daN] tal que T0 + a²p²/(8·T0) = Tmax (despejado de Tmax = T0 + p·f)"
-        b = self.vano_real
-        deslvl = abs(self.desnivel)
-        return (
-            1
-            / 4
-            * (
-                (2 * Tmax - p_t * deslvl)
-                + math.sqrt((p_t * deslvl - 2 * Tmax) ** 2 - 2 * (b * p_t) ** 2)
+    def _Tmax_minima(self, p_t):
+        """(T0, Tmax) en el punto en que la Tmax es la más pequeña posible.
+        Tmax(T0) baja y luego sube: con T0 pequeña la flecha se dispara. Si el límite de una
+        hipótesis es menor que esta Tmax mínima, ninguna tensión lo cumple (vano inviable)."""
+        b, d = self._b, self._d
+        if self.vano > VANO_CATENARIA:
+            # Tmax = p·h·cosh(b/2h) + p·d/2 es mínima cuando u·tanh(u) = 1, con u = b/2h
+            h = b / 2 / U_CATENARIA
+            return p_t * h, p_t * h * math.cosh(U_CATENARIA) + p_t * d / 2
+        # Tmax = T0 + b²p²/(8·T0) + p·d/2 es mínima en T0 = b·p/(2√2)
+        return b * p_t / (2 * math.sqrt(2)), b * p_t / math.sqrt(2) + p_t * d / 2
+
+    def _T0_desde_Tmax(self, Tmax, p_t, nombre="la hipótesis"):
+        """T0 [daN] tal que _Tmax(T0) = Tmax: pone una hipótesis justo en su límite.
+        Es la inversa exacta de _Tmax. Con la parábola se despeja (método del profesor);
+        con la catenaria (vano > 500 m) no se puede despejar y se busca por bisección."""
+        T_min, Tmax_min = self._Tmax_minima(p_t)
+        if Tmax < Tmax_min * (1 - 1e-12):
+            raise ValueError(
+                f"Vano inviable con el {self.conductor.conductor}: en {nombre} la tensión máxima "
+                f"nunca baja de {Tmax_min:.1f} daN y el límite es {Tmax:.1f} daN. "
+                "Reduce el vano o el desnivel, o usa un conductor más resistente"
             )
-        )
+
+        if self.vano <= VANO_CATENARIA:  # despejado de Tmax = T0 + p·(f + d/2)
+            b, d = self._b, self._d
+            raiz = math.sqrt(max(0.0, (p_t * d - 2 * Tmax) ** 2 - 2 * (b * p_t) ** 2))
+            return ((2 * Tmax - p_t * d) + raiz) / 4
+
+        # Catenaria: bisección en la rama de tensiones altas, entre T_min y Tmax
+        bajo, alto = T_min, Tmax
+        for _ in range(200):
+            medio = (bajo + alto) / 2
+            if self._Tmax(medio, p_t) < Tmax:
+                bajo = medio
+            else:
+                alto = medio
+            if alto - bajo <= 1e-12 * alto:
+                break
+        return (bajo + alto) / 2
 
     def _Tmax(self, T0, p_t):
-        "Tensión máxima en los apoyos [daN]: Tmax = T0 + p·f"
-        return T0 + p_t * (self._flecha(T0, p_t) + abs(self.desnivel) / 2)
+        "Tensión máxima en los apoyos [daN]: Tmax = T0 + p·(f + d/2)"
+        return T0 + p_t * (self._flecha(T0, p_t) + self._d / 2)
 
     def _flecha_exacta(self, T, p_t):
-        "Flecha [m] con la catenaria exacta. T [daN], p_t [daN/m]"
+        """Flecha [m] con la catenaria. T [daN], p_t [daN/m].
+        Usa el vano real b, como la parábola, para que la flecha no salte al pasar de 500 m"""
         h = T / p_t  # parámetro de la catenaria [m]
-        return h * (math.cosh(self.vano / (2 * h)) - 1)
+        u = self._b / (2 * h)
+        if u > 700:  # cosh desborda: con una tensión tan pequeña la flecha es enorme
+            return math.inf
+        return h * (math.cosh(u) - 1)
 
     def _flecha_aprox(self, T, p_t):
-        "Flecha aproximada si a<500m e inclinacion menor del 10%"
-        return self.vano_real**2 * p_t / (8 * T)
+        "Flecha con la parábola [m]: b²·p/(8·T). Vale si a < 500 m"
+        return self._b**2 * p_t / (8 * T)
 
     def _flecha(self, T, p_t):
-        if self.vano > 500:
+        "Flecha [m]: con la catenaria si el vano pasa de 500 m, si no con la parábola"
+        if self.vano > VANO_CATENARIA:
             return self._flecha_exacta(T, p_t)
         return self._flecha_aprox(T, p_t)
 
@@ -376,52 +666,66 @@ class calculoMecanico:
 
         lista = [
             ("EDS", 15, self.conductor.p, self.linea.limite_eds * R, self.con_desnivel),
-            ("viento", t_v, self._p_viento(self.linea.v_ref), R / self.linea.coef, True),
+            (
+                "viento",
+                t_v,
+                self.conductor.p_total_viento(self.linea.v_ref),
+                R / self.linea.coef,
+                True,
+            ),
         ]
         if self.linea.chs is not None:
-            lista.append(("CHS", -5, self.conductor.p, self.linea.chs * R, self.con_desnivel))
+            lista.append(
+                ("CHS", -5, self.conductor.p, self.linea.chs * R, self.con_desnivel)
+            )
         if self.linea.v_excepcional is not None:
             lista.append(
                 (
                     "viento excepcional",
                     t_v,
-                    self._p_viento(self.linea.v_excepcional),
+                    self.conductor.p_total_viento(self.linea.v_excepcional),
                     R / self.linea.coef,
                     True,
                 )
             )
         if self.linea.Zona in T_HIELO:
             p_h = (
-                self._sobrecarga_conjunta()
+                self.conductor.p_total_hielo_viento(self.linea.Zona)
                 if self.linea.categoria == "especial"
-                else self._p_hielo()
+                else self.conductor.p_total_hielo(self.linea.Zona)
             )
-            lista.append(("hielo", T_HIELO[self.linea.Zona], p_h, R / self.linea.coef, True))
+            lista.append(
+                ("hielo", T_HIELO[self.linea.Zona], p_h, R / self.linea.coef, True)
+            )
         return lista
 
     def _hipotesis_resultado(self):
         "Hipótesis de flechas: (nombre, θ [ºC], p_t [daN/m])"
-        t_max = 85 if self.linea.categoria == "especial" else 50
+        t_max = self.linea.t_flecha_maxima
         lista = [
             (
                 "flecha viento 15ºC",
                 15,
-                self._p_viento(120),
+                self.conductor.p_total_viento(120),
             ),  # siempre 120 km/h (aptdo. 3.2.3)
-            (f"flecha temperatura {t_max}ºC", t_max, self.conductor.p),
+            (f"flecha temperatura {t_max:g}ºC", t_max, self.conductor.p),
         ]
         if self.linea.Zona in T_HIELO:
-            lista.append(("flecha hielo 0ºC", 0, self._p_hielo()))
+            lista.append(("flecha hielo 0ºC", 0, self.conductor.p_total_hielo(self.linea.Zona)))
         lista += [
             ("flecha mínima", T_FLECHA_MIN[self.linea.Zona], self.conductor.p),
-            ("desviación cadena", T_VIENTO[self.linea.Zona], self._p_viento_mitad()),
+            (
+                "desviación cadena",  # mitad de la presión del viento de 120 km/h
+                T_VIENTO[self.linea.Zona],
+                self.conductor.p_total_viento(120, factor=0.5),
+            ),
         ]
         return lista
 
     def _estado_inicial(self, hipotesis):
         "Convierte una hipótesis limitante en estado conocido (nombre, θ, p_t, T0) poniéndola en su límite"
         nombre, theta, p_t, T_lim, sobre_Tmax = hipotesis
-        T0 = self._T0_desde_Tmax(T_lim, p_t) if sobre_Tmax else T_lim
+        T0 = self._T0_desde_Tmax(T_lim, p_t, nombre) if sobre_Tmax else T_lim
         return nombre, theta, p_t, T0
 
     def _ratio(self, T0, p_t, T_lim, sobre_Tmax):
@@ -434,7 +738,9 @@ class calculoMecanico:
         limitantes = self._hipotesis_limitantes()
         partida = self._estado_inicial(limitantes[0])  # se empieza suponiendo el EDS
 
-        for _ in range(len(limitantes)):  # como mucho una vuelta por hipótesis
+        # Una vuelta por hipótesis y una más: así también se comprueba el último reinicio
+        peor_ratio, peor = math.inf, limitantes[0]
+        for _ in range(len(limitantes) + 1):
             _nombre1, theta1, p1, T1 = partida
 
             # T0 en cada limitante partiendo de la supuesta, y cuánto se pasa de su límite
@@ -449,12 +755,21 @@ class calculoMecanico:
                 return partida
             partida = self._estado_inicial(peor)  # reiniciar desde la que más se pasa
 
-        return partida
+        # No debería pasar nunca, pero si pasa, mejor un error que un resultado que incumple
+        raise RuntimeError(
+            f"No se ha encontrado la hipótesis que manda: {peor[0]} queda al "
+            f"{100 * peor_ratio:.2f} % de su límite"
+        )
+
+    @property
+    def dominante(self) -> str:
+        "Nombre de la hipótesis que manda"
+        return self._hipotesis_dominante()[0]
 
     def resolver(self):
         "Calcula todas las hipótesis. Devuelve un DataFrame con T0, Tmax, % rotura (con T0 y con Tmax) y flecha"
+        self.validar()
         nombre1, theta1, p1, T1 = self._hipotesis_dominante()
-        self.dominante = nombre1
         R = self.conductor.rotura
 
         filas = []
@@ -507,8 +822,10 @@ class calculoMecanico:
         ).set_index("hipotesis")
         return self.resultados
 
-    def tabla_tendido(self, temperaturas=range(0, 50, 5)):
-        "Tensión y flecha de tendido (sin sobrecarga) para cada temperatura"
+    def tabla_tendido(self, temperaturas: Iterable[float] | float = range(0, 50, 5)):
+        "Tensión y flecha de tendido (sin sobrecarga) para cada temperatura [ºC]"
+        temperaturas = _lista_de_temperaturas(temperaturas)
+        self.validar()
         nombre1, theta1, p1, T1 = self._hipotesis_dominante()
         p = self.conductor.p
 
@@ -522,24 +839,32 @@ class calculoMecanico:
 
     @property
     def flecha_maxima(self):
-        "Mayor flecha de las hipótesis de flecha máxima [m]"
-        if not hasattr(self, "resultados"):
-            self.resolver()
+        "Mayor flecha de las hipótesis de flecha máxima [m] (se recalcula siempre)"
+        resultados = self.resolver()
         nombres = [
             n
-            for n in self.resultados.index
+            for n in resultados.index
             if n.startswith("flecha") and n != "flecha mínima"
         ]
-        return self.resultados.loc[nombres, "flecha_m"].max()
+        return resultados.loc[nombres, "flecha_m"].max()
 
     #  EXPORTAR
 
     def exportar_excel(
-        self, ruta="calculo_mecanico.xlsx", temperaturas=range(0, 50, 5)
+        self,
+        ruta: str | Path = "calculo_mecanico.xlsx",
+        temperaturas: Iterable[float] | float = range(0, 50, 5),
     ):
         "Guarda en un Excel los datos de entrada, la tabla de hipótesis y la tabla de tendido"
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
+
+        # Sin extensión se le pone .xlsx; con otra extensión, error (se escribiría un .xlsx mal nombrado)
+        ruta = Path(ruta)
+        if ruta.suffix == "":
+            ruta = ruta.with_suffix(".xlsx")
+        elif ruta.suffix.lower() != ".xlsx":
+            raise ValueError(f"ruta={str(ruta)!r}: el archivo tiene que ser .xlsx")
 
         resultados = self.resolver().reset_index()
         tendido = self.tabla_tendido(temperaturas).reset_index()
@@ -559,6 +884,8 @@ class calculoMecanico:
                 ["Zona", self.linea.Zona, ""],
                 ["Categoría", self.linea.categoria, ""],
                 ["Vano", self.vano, "m"],
+                ["Desnivel", self.desnivel, "m"],
+                ["Vano real b", round(self.vano_real, 2), "m"],
                 ["Viento de referencia", self.linea.v_ref, "km/h"],
                 [
                     "Viento excepcional",
@@ -567,7 +894,13 @@ class calculoMecanico:
                 ],
                 ["Coeficiente de seguridad", self.linea.coef, ""],
                 ["Límite EDS", round(100 * self.linea.limite_eds, 2), "% rotura"],
-                ["Límite CHS", round(100 * self.linea.chs, 2) if self.linea.chs is not None else "—", "% rotura"],
+                [
+                    "Límite CHS",
+                    round(100 * self.linea.chs, 2)
+                    if self.linea.chs is not None
+                    else "—",
+                    "% rotura",
+                ],
                 ["Hipótesis que manda", self.dominante, ""],
                 ["Flecha máxima", round(self.flecha_maxima, 2), "m"],
             ],
@@ -610,17 +943,15 @@ class calculoMecanico:
                     celda.fill = cabecera
                     celda.alignment = Alignment(horizontal="center", wrap_text=True)
                 for i, col in enumerate(df.columns, start=1):
-                    ancho = (
-                        max(len(str(col)), *(len(str(v)) for v in df.iloc[:, i - 1]))
-                        + 2
-                    )
+                    # max() de una lista, para que funcione también con una tabla vacía
+                    ancho = max([len(str(col)), *(len(str(v)) for v in df.iloc[:, i - 1])]) + 2
                     hoja.column_dimensions[get_column_letter(i)].width = min(ancho, 28)
                     if decimales:
                         for celda in hoja[get_column_letter(i)][1:]:
                             if isinstance(celda.value, float):
                                 celda.number_format = decimales
                 hoja.freeze_panes = "A2"
-        return ruta
+        return str(ruta)
 
 
 #  CÁLCULO MECÁNICO DE APOYOS
@@ -631,13 +962,29 @@ TIPOS_APOYO = ("principio de línea", "fin de línea", "suspensión", "amarre", 
 TIPOS_SIN_ANGULO = ("principio de línea", "fin de línea")
 
 # Cadenas de aisladores por fase: una en suspensión y en los extremos, dos (una a cada lado) en amarre
-CADENAS_POR_FASE = {"principio de línea": 1, "fin de línea": 1, "suspensión": 1, "amarre": 2, "anclaje": 2}
+CADENAS_POR_FASE = {
+    "principio de línea": 1,
+    "fin de línea": 1,
+    "suspensión": 1,
+    "amarre": 2,
+    "anclaje": 2,
+}
 
 # 3ª hipótesis: desequilibrio de tracciones en tanto por uno (Un <= 66 kV, Un > 66 kV). ITC-LAT-07 3.1.4
-DESEQUILIBRIO = {"suspensión": (0.08, 0.15), "amarre": (0.15, 0.25), "anclaje": (0.50, 0.50)}
+DESEQUILIBRIO = {
+    "suspensión": (0.08, 0.15),
+    "amarre": (0.15, 0.25),
+    "anclaje": (0.50, 0.50),
+}
 
 # 4ª hipótesis: tensión del conductor roto que llega al apoyo (un conductor por fase). ITC-LAT-07 3.1.5
-ROTURA = {"suspensión": 0.50, "amarre": 1.0, "anclaje": 1.0, "principio de línea": 1.0, "fin de línea": 1.0}
+ROTURA = {
+    "suspensión": 0.50,
+    "amarre": 1.0,
+    "anclaje": 1.0,
+    "principio de línea": 1.0,
+    "fin de línea": 1.0,
+}
 
 # Formas constructivas: celosía (UNE 207017) y chapa (UNE 207018)
 FORMAS_APOYO = ("celosía", "chapa")
@@ -646,7 +993,9 @@ FORMAS_APOYO = ("celosía", "chapa")
 NOMBRES_HIPOTESIS = ("1ª viento", "2ª hielo", "3ª desequilibrio", "4ª rotura")
 
 
-def factor_reduccion_chapa(b: float, c: float, hc: float = 5.0, h0: float = 0.25) -> float:
+def factor_reduccion_chapa(
+    b: float, c: float, hc: float = 5.0, h0: float = 0.25
+) -> float:
     """Factor para llevar los esfuerzos de una cruceta de bóveda al punto donde los da el
     fabricante en apoyos de chapa (h0 por debajo de la cogolla): (h + hc) / (hc - h0),
     con h = (b + 2c) / 3 la altura de la resultante. b y c: cotas de la cruceta [m]"""
@@ -668,7 +1017,9 @@ class Canton:
     fin: int  # Nº del apoyo donde acaba
     vano_regulacion: float  # Vano de regulación [m]
     desnivel: float  # Mayor desnivel de sus vanos [m]
-    calculo: calculoMecanico = field(repr=False)  # Cálculo mecánico del conductor del cantón
+    calculo: calculoMecanico = field(
+        repr=False
+    )  # Cálculo mecánico del conductor del cantón
 
     @property
     def tramos(self) -> list[str]:
@@ -678,26 +1029,41 @@ class Canton:
 
 @dataclass
 class CalculoApoyos:
-
-    conductor: Conductor        # Propiedades de los conductores
-    linea: Linea                # Datos de la línea (tensión, altitud, viento, límites...)
-    vanos: list[float]          # Vano entre cada par de apoyos consecutivos [m] (n - 1 valores)
-    desniveles: list[float]     # Desnivel de cada apoyo respecto al anterior [m] (n valores, el 1º = 0)
-    tipos: list[str]            # Tipo de cada apoyo, uno de TIPOS_APOYO (n valores)
+    conductor: Conductor  # Propiedades de los conductores
+    linea: Linea  # Datos de la línea (tensión, altitud, viento, límites...)
+    vanos: list[float]  # Vano entre cada par de apoyos consecutivos [m] (n - 1 valores)
+    desniveles: list[
+        float
+    ]  # Desnivel de cada apoyo respecto al anterior [m] (n valores, el 1º = 0)
+    tipos: list[str]  # Tipo de cada apoyo, uno de TIPOS_APOYO (n valores)
     angulos: dict[int, float] = field(
         default_factory=dict  # {nº de apoyo: ángulo [º]} de los apoyos de ángulo
     )
-    tensiones: pd.DataFrame | None = None # Tabla que me da el enuunciado en caso de que me de las tensiones
+    tensiones: pd.DataFrame | None = (
+        None  # Tabla que me da el enuunciado en caso de que me de las tensiones
+    )
 
     # Datos de los apoyos para calcular los esfuerzos
     n_conductores: int = 3  # Nº de conductores (3 en un circuito simplex)
-    peso_cadena_amarre: float | None = None  # Peso de una cadena de amarre con sus herrajes [daN]
-    peso_cadena_suspension: float | None = None  # Ídem de suspensión [daN]. None -> igual que la de amarre
+    peso_cadena_amarre: float | None = (
+        None  # Peso de una cadena de amarre con sus herrajes [daN]
+    )
+    peso_cadena_suspension: float | None = (
+        None  # Ídem de suspensión [daN]. None -> igual que la de amarre
+    )
     peso_cruceta: float | None = None  # Peso de la cruceta [daN]
-    peso_cruceta_suspension: float | None = None  # Ídem en los de suspensión [daN]. None -> igual
-    brazo_cruceta: float | None = None  # Distancia del conductor exterior al eje del apoyo [m]
-    formas: str | list[str] = "celosía"  # Forma constructiva: una para todos o una por apoyo
-    factor_chapa: float = 1.0  # Reducción de T y L en los de chapa, ver factor_reduccion_chapa()
+    peso_cruceta_suspension: float | None = (
+        None  # Ídem en los de suspensión [daN]. None -> igual
+    )
+    brazo_cruceta: float | None = (
+        None  # Distancia del conductor exterior al eje del apoyo [m]
+    )
+    formas: str | list[str] = (
+        "celosía"  # Forma constructiva: una para todos o una por apoyo
+    )
+    factor_chapa: float = (
+        1.0  # Reducción de T y L en los de chapa, ver factor_reduccion_chapa()
+    )
     rotura: bool | None = None  # 4ª hipótesis: None -> según ITC-LAT-07 3.5.3
 
     def __post_init__(self):
@@ -708,26 +1074,38 @@ class CalculoApoyos:
                 f"Hay {self.n} tipos de apoyo pero {len(self.desniveles)} desniveles"
             )
         if len(self.vanos) != self.n - 1:
-            raise ValueError(f"Con {self.n} apoyos hay {self.n - 1} vanos, no {len(self.vanos)}")
+            raise ValueError(
+                f"Con {self.n} apoyos hay {self.n - 1} vanos, no {len(self.vanos)}"
+            )
         if self.desniveles[0] != 0:
-            raise ValueError("El primer apoyo no tiene apoyo anterior: su desnivel debe ser 0")
+            raise ValueError(
+                "El primer apoyo no tiene apoyo anterior: su desnivel debe ser 0"
+            )
 
         # Tipos escritos de cualquier forma -> nombre del reglamento
         nombres = {_normalizar(t): t for t in TIPOS_APOYO}
         tipos = []
         for numero, tipo in enumerate(self.tipos, start=1):
             if _normalizar(tipo) not in nombres:
-                raise ValueError(f"Apoyo {numero}: tipo {tipo!r} desconocido. Usa uno de {TIPOS_APOYO}")
+                raise ValueError(
+                    f"Apoyo {numero}: tipo {tipo!r} desconocido. Usa uno de {TIPOS_APOYO}"
+                )
             tipos.append(nombres[_normalizar(tipo)])
         self.tipos = tipos
 
         for numero, angulo in self.angulos.items():
             if not 1 <= numero <= self.n:
-                raise ValueError(f"Ángulo en el apoyo {numero}, pero solo hay apoyos del 1 al {self.n}")
+                raise ValueError(
+                    f"Ángulo en el apoyo {numero}, pero solo hay apoyos del 1 al {self.n}"
+                )
             if self.tipos[numero - 1] in TIPOS_SIN_ANGULO:
-                raise ValueError(f"El apoyo {numero} es de {self.tipos[numero - 1]}: no puede ser de ángulo")
+                raise ValueError(
+                    f"El apoyo {numero} es de {self.tipos[numero - 1]}: no puede ser de ángulo"
+                )
             if not 0 < angulo < 180:
-                raise ValueError(f"Apoyo {numero}: el ángulo debe estar entre 0º y 180º, no {angulo}")
+                raise ValueError(
+                    f"Apoyo {numero}: el ángulo debe estar entre 0º y 180º, no {angulo}"
+                )
 
         # Geometría: posición horizontal y cota de cada apoyo, tomando el 1º como origen
         self.posiciones = [float(x) for x in np.cumsum([0, *self.vanos])]
@@ -737,11 +1115,15 @@ class CalculoApoyos:
         if isinstance(self.formas, str):
             self.formas = [self.formas] * self.n
         if len(self.formas) != self.n:
-            raise ValueError(f"Hay {self.n} apoyos pero {len(self.formas)} formas constructivas")
+            raise ValueError(
+                f"Hay {self.n} apoyos pero {len(self.formas)} formas constructivas"
+            )
         nombres_formas = {_normalizar(f): f for f in FORMAS_APOYO}
         for numero, forma in enumerate(self.formas, start=1):
             if _normalizar(forma) not in nombres_formas:
-                raise ValueError(f"Apoyo {numero}: forma {forma!r} desconocida. Usa una de {FORMAS_APOYO}")
+                raise ValueError(
+                    f"Apoyo {numero}: forma {forma!r} desconocida. Usa una de {FORMAS_APOYO}"
+                )
         self.formas = [nombres_formas[_normalizar(f)] for f in self.formas]
 
         # Tramos ("1-2", "2-3"...) y cantones, cada uno con su cálculo mecánico
@@ -775,16 +1157,24 @@ class CalculoApoyos:
     def _cantones(self) -> list[Canton]:
         """Divide la línea en cantones, cortando en todos los apoyos que no son de suspensión.
         Cada cantón se calcula con su vano de regulación y su mayor desnivel."""
-        cortes = [1] + [k for k in range(2, self.n) if self.tipos[k - 1] != "suspensión"] + [self.n]
+        cortes = (
+            [1]
+            + [k for k in range(2, self.n) if self.tipos[k - 1] != "suspensión"]
+            + [self.n]
+        )
 
         cantones = []
         for inicio, fin in itertools.pairwise(cortes):
             vanos = self.vanos[inicio - 1 : fin - 1]
-            desniveles = self.desniveles[inicio:fin]  # de cada vano: apoyo final respecto al inicial
+            desniveles = self.desniveles[
+                inicio:fin
+            ]  # de cada vano: apoyo final respecto al inicial
             vano_regulacion = math.sqrt(sum(a**3 for a in vanos) / sum(vanos))
             desnivel = max(desniveles, key=abs)
 
-            calculo = calculoMecanico(self.conductor, self.linea, vano=vano_regulacion, desnivel=desnivel)
+            calculo = calculoMecanico(
+                self.conductor, self.linea, vano=vano_regulacion, desnivel=desnivel
+            )
             calculo.resolver()  # los resultados quedan guardados en calculo.resultados
             cantones.append(Canton(inicio, fin, vano_regulacion, desnivel, calculo))
         return cantones
@@ -811,12 +1201,16 @@ class CalculoApoyos:
 
         desconocidos = [t for t in tabla.index if t not in self.tramos]
         if desconocidos:
-            raise ValueError(f"Los tramos {desconocidos} no existen. Los tramos son {self.tramos}")
+            raise ValueError(
+                f"Los tramos {desconocidos} no existen. Los tramos son {self.tramos}"
+            )
 
         hipotesis = list(self.cantones[0].calculo.resultados.index)
         columnas = [c for c in tabla.columns if c not in hipotesis]
         if columnas:
-            raise ValueError(f"{columnas} no son hipótesis del cálculo. Usa nombres de {hipotesis}")
+            raise ValueError(
+                f"{columnas} no son hipótesis del cálculo. Usa nombres de {hipotesis}"
+            )
 
         return tabla.reindex(self.tramos).rename_axis("tramo")
 
@@ -827,9 +1221,23 @@ class CalculoApoyos:
         El desnivel es el del apoyo final del vano respecto al inicial."""
         lados = []
         if numero > 1:  # vano anterior: este apoyo es su extremo final
-            lados.append((f"{numero - 1}-{numero}", self.vanos[numero - 2], self.desniveles[numero - 1], 1))
+            lados.append(
+                (
+                    f"{numero - 1}-{numero}",
+                    self.vanos[numero - 2],
+                    self.desniveles[numero - 1],
+                    1,
+                )
+            )
         if numero < self.n:  # vano siguiente: este apoyo es su extremo inicial
-            lados.append((f"{numero}-{numero + 1}", self.vanos[numero - 1], self.desniveles[numero], -1))
+            lados.append(
+                (
+                    f"{numero}-{numero + 1}",
+                    self.vanos[numero - 1],
+                    self.desniveles[numero],
+                    -1,
+                )
+            )
         return lados
 
     def _tension(self, tramo: str, hipotesis: str) -> float:
@@ -844,8 +1252,9 @@ class CalculoApoyos:
 
     def _peso_aparente(self, hipotesis: str) -> float:
         "Peso del conductor con la sobrecarga de la hipótesis [daN/m], el del gravivano"
-        calc = self.cantones[0].calculo
-        return calc._p_viento() if hipotesis == "viento" else calc._p_hielo()
+        if hipotesis == "viento":
+            return self.conductor.p_total_viento(self.linea.v_ref)
+        return self.conductor.p_total_hielo(self.linea.Zona)
 
     def gravivano(self, numero: int, hipotesis: str) -> float:
         "Longitud de conductor cuyo peso soporta el apoyo [m]: Σ a/2 ± (T/p)·(d/a)"
@@ -882,11 +1291,17 @@ class CalculoApoyos:
 
     def hipotesis_viento(self, numero: int) -> dict:
         "1ª hipótesis: viento de 120 km/h (140 en categoría especial)"
-        n, tipo, alfa = self.n_conductores, self.tipos[numero - 1], self.angulos.get(numero)
+        n, tipo, alfa = (
+            self.n_conductores,
+            self.tipos[numero - 1],
+            self.angulos.get(numero),
+        )
         lados = self._lados(numero)
-        pv = self.cantones[0].calculo._pv()  # presión del viento por metro de conductor [daN/m]
+        pv = self.conductor.sobrecarga_viento(self.linea.v_ref)  # viento por metro de conductor [daN/m]
 
-        V = n * self.conductor.p * self.gravivano(numero, "viento") + self._peso_cadenas_y_cruceta(numero)
+        V = n * self.conductor.p * self.gravivano(
+            numero, "viento"
+        ) + self._peso_cadenas_y_cruceta(numero)
         T = n * pv * self.eolovano(numero)
         if alfa:  # resultante de ángulo + viento proyectado en la bisectriz
             tensiones = sum(self._tension(tramo, "viento") for tramo, *_ in lados)
@@ -894,36 +1309,61 @@ class CalculoApoyos:
                 tensiones * math.sin(math.radians(alfa / 2))
                 + pv * self.eolovano(numero) * math.cos(math.radians(alfa / 2))
             )
-        L = n * self._tension(lados[0][0], "viento") if tipo in TIPOS_SIN_ANGULO else None
+        L = (
+            n * self._tension(lados[0][0], "viento")
+            if tipo in TIPOS_SIN_ANGULO
+            else None
+        )
         return {"V": V, "T": T, "L": L, "Mt": None}
 
     def hipotesis_hielo(self, numero: int) -> dict:
         "2ª hipótesis: hielo (solo zonas B y C)"
-        calc = self.cantones[0].calculo
         if self.linea.Zona == "A":
             raise ValueError("En zona A no hay 2ª hipótesis (hielo)")
         if self.linea.categoria == "especial":
-            raise NotImplementedError("Falta la 2ª hipótesis de categoría especial (hielo + viento)")
+            raise NotImplementedError(
+                "Falta la 2ª hipótesis de categoría especial (hielo + viento)"
+            )
 
-        n, tipo, alfa = self.n_conductores, self.tipos[numero - 1], self.angulos.get(numero)
+        n, tipo, alfa = (
+            self.n_conductores,
+            self.tipos[numero - 1],
+            self.angulos.get(numero),
+        )
         lados = self._lados(numero)
 
-        V = n * calc._p_hielo() * self.gravivano(numero, "hielo") + self._peso_cadenas_y_cruceta(numero)
+        V = n * self.conductor.p_total_hielo(self.linea.Zona) * self.gravivano(
+            numero, "hielo"
+        ) + self._peso_cadenas_y_cruceta(numero)
         T = None
         if alfa:  # resultante de ángulo
             tensiones = sum(self._tension(tramo, "hielo") for tramo, *_ in lados)
             T = n * tensiones * math.sin(math.radians(alfa / 2))
-        L = n * self._tension(lados[0][0], "hielo") if tipo in TIPOS_SIN_ANGULO else None
+        L = (
+            n * self._tension(lados[0][0], "hielo")
+            if tipo in TIPOS_SIN_ANGULO
+            else None
+        )
         return {"V": V, "T": T, "L": L, "Mt": None}
 
     def hipotesis_desequilibrio(self, numero: int) -> dict:
         "3ª hipótesis: desequilibrio de tracciones (no se aplica en principio ni fin de línea)"
-        tipo, alfa, n = self.tipos[numero - 1], self.angulos.get(numero), self.n_conductores
+        tipo, alfa, n = (
+            self.tipos[numero - 1],
+            self.angulos.get(numero),
+            self.n_conductores,
+        )
         if tipo in TIPOS_SIN_ANGULO:
-            raise ValueError(f"En los apoyos de {tipo} no hay 3ª hipótesis: el 100 % ya está en la 1ª y la 2ª")
+            raise ValueError(
+                f"En los apoyos de {tipo} no hay 3ª hipótesis: el 100 % ya está en la 1ª y la 2ª"
+            )
 
         base = self._hipotesis_base()
-        V = (self.hipotesis_hielo(numero) if base == "hielo" else self.hipotesis_viento(numero))["V"]
+        V = (
+            self.hipotesis_hielo(numero)
+            if base == "hielo"
+            else self.hipotesis_viento(numero)
+        )["V"]
         k = DESEQUILIBRIO[tipo][self.linea.Un > 66]
         T_max = max(self._tension(tramo, base) for tramo, *_ in self._lados(numero))
 
@@ -942,11 +1382,14 @@ class CalculoApoyos:
             raise ValueError("Falta el dato brazo_cruceta")
         tipo, n = self.tipos[numero - 1], self.n_conductores
         base = self._hipotesis_base()
-        calc = self.cantones[0].calculo
-        p = calc._p_hielo() if base == "hielo" else self.conductor.p  # peso vertical del conductor
+        p = (
+            self.conductor.p_total_hielo(self.linea.Zona) if base == "hielo" else self.conductor.p
+        )  # peso vertical del conductor
 
         lados = self._lados(numero)
-        tramo_roto, a_roto, *_ = max(lados, key=lambda lado: self._tension(lado[0], base))
+        tramo_roto, a_roto, *_ = max(
+            lados, key=lambda lado: self._tension(lado[0], base)
+        )
         a_g_fase_rota = a_roto / 2 if len(lados) == 2 else 0
         V = (
             (n - 1) * p * self.gravivano(numero, base)
@@ -1032,7 +1475,12 @@ class CalculoApoyos:
         y_cota_min = z.min() - 0.55 * alto  # línea de cotas de los vanos
         ancho = 0.018 * largo  # ancho de la base de los apoyos en el dibujo
 
-        fondo = {"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 1.5}  # fondo de los textos
+        fondo = {
+            "facecolor": "white",
+            "edgecolor": "none",
+            "alpha": 0.85,
+            "pad": 1.5,
+        }  # fondo de los textos
 
         fig, ax = plt.subplots(figsize=(13, 5.5))
 
@@ -1048,41 +1496,99 @@ class CalculoApoyos:
             xv = (x0 + x1) / 2 - h * (y1 - y0) / (x1 - x0)  # vértice (punto más bajo)
             yv = y0 - (x0 - xv) ** 2 / (2 * h)
             xs = np.linspace(x0, x1, 200)
-            ax.plot(xs, yv + (xs - xv) ** 2 / (2 * h), color="#1f4e79", lw=1.4, zorder=2)
+            ax.plot(
+                xs, yv + (xs - xv) ** 2 / (2 * h), color="#1f4e79", lw=1.4, zorder=2
+            )
 
         for i in range(self.n):
             numero = i + 1
             self._dibujar_apoyo(ax, x[i], z[i], alto, ancho)
-            ax.text(x[i], z[i] + 1.08 * alto, str(numero), ha="center", va="bottom",
-                    fontsize=11, fontweight="bold")
-            ax.text(x[i], z[i] - 0.06 * alto, self.etiqueta(numero), ha="center", va="top",
-                    fontsize=8, zorder=4, bbox=fondo)
+            ax.text(
+                x[i],
+                z[i] + 1.08 * alto,
+                str(numero),
+                ha="center",
+                va="bottom",
+                fontsize=11,
+                fontweight="bold",
+            )
+            ax.text(
+                x[i],
+                z[i] - 0.06 * alto,
+                self.etiqueta(numero),
+                ha="center",
+                va="top",
+                fontsize=8,
+                zorder=4,
+                bbox=fondo,
+            )
 
             # Desnivel respecto al apoyo anterior
             d = self.desniveles[i]
             if i > 0 and d != 0:
-                xa = x[i] - 3.6 * ancho  # a la izquierda del apoyo, sin pisar su etiqueta
-                ax.plot([x[i - 1], xa], [z[i - 1], z[i - 1]], color="0.55", lw=0.8, ls=":", zorder=1)
-                ax.annotate("", xy=(xa, z[i]), xytext=(xa, z[i - 1]),
-                            arrowprops={"arrowstyle": "<->", "color": "#b03a2e", "lw": 1})
-                ax.text(xa - 0.4 * ancho, (z[i] + z[i - 1]) / 2, f"{d:+g} m".replace("-", "−"),
-                        ha="right", va="center", fontsize=9, color="#b03a2e", zorder=4, bbox=fondo)
+                xa = (
+                    x[i] - 3.6 * ancho
+                )  # a la izquierda del apoyo, sin pisar su etiqueta
+                ax.plot(
+                    [x[i - 1], xa],
+                    [z[i - 1], z[i - 1]],
+                    color="0.55",
+                    lw=0.8,
+                    ls=":",
+                    zorder=1,
+                )
+                ax.annotate(
+                    "",
+                    xy=(xa, z[i]),
+                    xytext=(xa, z[i - 1]),
+                    arrowprops={"arrowstyle": "<->", "color": "#b03a2e", "lw": 1},
+                )
+                ax.text(
+                    xa - 0.4 * ancho,
+                    (z[i] + z[i - 1]) / 2,
+                    f"{d:+g} m".replace("-", "−"),
+                    ha="right",
+                    va="center",
+                    fontsize=9,
+                    color="#b03a2e",
+                    zorder=4,
+                    bbox=fondo,
+                )
 
         # Cotas de los vanos
         for i in range(self.n - 1):
-            ax.annotate("", xy=(x[i + 1], y_cota_min), xytext=(x[i], y_cota_min),
-                        arrowprops={"arrowstyle": "<->", "color": "0.25", "lw": 1})
-            ax.text((x[i] + x[i + 1]) / 2, y_cota_min + 0.03 * alto, f"{self.vanos[i]:g} m",
-                    ha="center", va="bottom", fontsize=9)
+            ax.annotate(
+                "",
+                xy=(x[i + 1], y_cota_min),
+                xytext=(x[i], y_cota_min),
+                arrowprops={"arrowstyle": "<->", "color": "0.25", "lw": 1},
+            )
+            ax.text(
+                (x[i] + x[i + 1]) / 2,
+                y_cota_min + 0.03 * alto,
+                f"{self.vanos[i]:g} m",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
         for i in range(self.n):
-            ax.plot([x[i], x[i]], [y_cota_min - 0.05 * alto, z[i] - 0.45 * alto],
-                    color="0.6", lw=0.6, ls="--", zorder=1)
+            ax.plot(
+                [x[i], x[i]],
+                [y_cota_min - 0.05 * alto, z[i] - 0.45 * alto],
+                color="0.6",
+                lw=0.6,
+                ls="--",
+                zorder=1,
+            )
 
         ax.set_xlim(x[0] - 0.06 * largo, x[-1] + 0.06 * largo)
         ax.set_ylim(y_cota_min - 0.2 * alto, z.max() + 1.35 * alto)
         ax.axis("off")
-        ax.set_title(f"Esquema de la línea: {self.n} apoyos, {largo:g} m "
-                     "(escala vertical exagerada)", fontsize=11)
+        ax.set_title(
+            f"Esquema de la línea: {self.n} apoyos, {largo:g} m "
+            "(escala vertical exagerada)",
+            fontsize=11,
+        )
         fig.tight_layout()
 
         if ruta is not None:
@@ -1107,7 +1613,17 @@ class CalculoApoyos:
         for y0, y1 in itertools.pairwise(niveles):
             ax.plot([izq(y0), der(y1)], [y0, y1], color=color, lw=0.5, zorder=3)
             ax.plot([der(y0), izq(y1)], [y0, y1], color=color, lw=0.5, zorder=3)
-        ax.plot([x - 1.1 * ancho, x + 1.1 * ancho], [y_cruceta, y_cruceta], color=color, lw=1.6,
-                zorder=3)
-        ax.plot([izq(y_cruceta), x, der(y_cruceta)], [y_cruceta, z + alto, y_cruceta],
-                color=color, lw=1.2, zorder=3)
+        ax.plot(
+            [x - 1.1 * ancho, x + 1.1 * ancho],
+            [y_cruceta, y_cruceta],
+            color=color,
+            lw=1.6,
+            zorder=3,
+        )
+        ax.plot(
+            [izq(y_cruceta), x, der(y_cruceta)],
+            [y_cruceta, z + alto, y_cruceta],
+            color=color,
+            lw=1.2,
+            zorder=3,
+        )

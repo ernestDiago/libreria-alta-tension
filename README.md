@@ -59,7 +59,10 @@ Tensión de línea en el origen [kV]           415.285      414.758       414.76
 Intensidad en el origen [A]                 1082.532     1051.960      1051.977                        1051.972
 Potencia activa en el origen [MW]            603.375      603.281       603.283                         603.281
 Pérdidas de potencia [MW]                      3.375        3.281         3.283                           3.281
+Pérdidas respecto a P0 [%]                     0.559        0.544         0.544                           0.544
 Caída de tensión aritmética [kV]              15.285       14.758        14.769                          14.761
+Caída de tensión respecto a Uf [%]             3.821        3.689         3.692                           3.690
+Intensidad de vacío [A]                        0.000       49.883        49.851                          49.862
 ```
 
 ### Cálculo mecánico
@@ -222,7 +225,7 @@ Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de 
 
 | Método / atributo | Devuelve |
 |---|---|
-| `inductivo()`, `T()`, `pi()`, `distribuidos()` | Diccionario con U₀ [kV], I₀ [A], P₀ [MW], ΔP [MW] y ΔU [kV] |
+| `inductivo()`, `T()`, `pi()`, `distribuidos()` | Diccionario con U₀ [kV], I₀ [A], P₀ [MW], ΔP [MW], ΔP/P₀ [%], ΔU [kV], ΔU/U_f [%] e intensidad de vacío [A] |
 | `comparar()` | `DataFrame` con los cuatro modelos en columnas |
 | `Z`, `Y` | Impedancia [Ω] y admitancia [S] totales (complejos) |
 | `Ic`, `Vf` | Intensidad [A] y tensión simple [V] en la carga (complejos) |
@@ -236,7 +239,9 @@ Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de 
 | `E_dato` | `float \| None` | Módulo de elasticidad [daN/mm²]. Si es `None`, se toma de `PROPIEDADES` |
 | `alfa_dato` | `float \| None` | Coeficiente de dilatación lineal [1/ºC]. Si es `None`, se toma de `PROPIEDADES` |
 
-**Atributos calculados:** `datos` (fila completa del CSV), `p` (peso propio, daN/m), `d` (diámetro, mm), `S` (sección, mm²), `rotura` (carga de rotura, daN), `E` y `alfa`.
+**Atributos calculados** (propiedades, se actualizan solos si cambias el conductor, `E_dato` o `alfa_dato`): `datos` (fila completa del CSV), `nombre` (nombre en la tabla), `p` (peso propio, daN/m), `d` (diámetro, mm), `S` (sección, mm²), `rotura` (carga de rotura, daN), `E` y `alfa`.
+
+El nombre se puede escribir en minúsculas, con espacios de más o sin la palabra final (`"LA 280"` → `LA 280 HAWK`). Si no existe, el error dice qué conductores hay. Con los CSV de conductores homogéneos (`conductores_AL1.csv`, `conductores_AL2.csv`) hay que dar `E_dato` y `alfa_dato`, porque el temario no da valores típicos.
 
 ### `Linea`
 
@@ -251,10 +256,11 @@ Datos comunes a todos los cálculos mecánicos de una línea. Se crea una vez y 
 | `coef_seguridad` | `float \| None` | `None` | Coeficiente de seguridad a rotura. `None` → 3 en media tensión (15–20 kV) y 2,5 en el resto |
 | `chs` | `float \| None` | `0.20` | Límite CHS a −5 ºC, **en tanto por uno** (15,9 % → `0.159`). `None` → no se comprueba |
 | `eds` | `float \| None` | `None` | Límite EDS a 15 ºC del enunciado, **en tanto por uno** (8,7 % → `0.087`). `None` → 15 %, o 22 % con `antivibradores` |
+| `temperatura_maxima` | `float \| None` | `None` | Temperatura de la hipótesis de flecha máxima [ºC]. `None` → 50 ºC (85 ºC en categoría especial), que es el mínimo del reglamento |
 
-**Atributos calculados:** `Zona`, `categoria`, `coef` (coeficiente de seguridad), `v_ref` (viento de referencia), `v_excepcional` y `limite_eds`.
+**Atributos calculados** (propiedades, se actualizan solos si cambias la altitud, la tensión…): `Zona`, `categoria`, `coef` (coeficiente de seguridad), `v_ref` (viento de referencia), `v_excepcional`, `limite_eds` y `t_flecha_maxima`.
 
-Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` (en `Conductor`) no es del orden de 10⁻⁵, se lanza un `ValueError`. Así se detectan errores como escribir `chs=15.9` o `alfa_dato=17.8 * 1e6`.
+Los datos se comprueban al crear los objetos y antes de cada cálculo, y un dato imposible da un `ValueError` que explica el problema: `eds` o `chs` fuera de 0–1 (por ejemplo `chs=15.9`), `alfa_dato` que no es del orden de 10⁻⁵ (`alfa_dato=17.8 * 1e6`), `Un`, `vano`, `E_dato`, `Vv` o `coef_seguridad` no positivos, altitud negativa o `temperatura_maxima` menor que el mínimo. Un `coef_seguridad` menor que 2,5 se acepta, pero da un aviso.
 
 ### `calculoMecanico`
 
@@ -268,14 +274,16 @@ Si `eds` o `chs` no están entre 0 y 1, o `alfa_dato` (en `Conductor`) no es del
 | Método / atributo | Devuelve |
 |---|---|
 | `resolver()` | `DataFrame` con la temperatura, el peso aparente, T₀, T_max, el % de rotura con T₀ (`%_rotura`) y con T_max (`%_rotura_TB`), la flecha y el límite de cada hipótesis |
-| `tabla_tendido(temperaturas=range(0, 50, 5))` | `DataFrame` con T y flecha sin sobrecarga para cada temperatura |
-| `exportar_excel(ruta, temperaturas)` | Guarda un Excel con los datos, las hipótesis y la tabla de tendido |
-| `flecha_maxima` | Mayor de las flechas máximas [m] |
-| `dominante` | Nombre de la hipótesis que manda (disponible tras `resolver()`) |
+| `tabla_tendido(temperaturas=range(0, 50, 5))` | `DataFrame` con T y flecha sin sobrecarga para cada temperatura (también admite una sola, `tabla_tendido(15)`) |
+| `exportar_excel(ruta, temperaturas)` | Guarda un Excel (`.xlsx`; si no tiene extensión se le pone) con los datos, el desnivel, las hipótesis y la tabla de tendido |
+| `flecha_maxima` | Mayor de las flechas máximas [m] (se recalcula siempre) |
+| `dominante` | Nombre de la hipótesis que manda |
 | `linea.Zona`, `linea.categoria`, `linea.coef`… | Datos derivados de la línea (ver `Linea`) |
 | `vano_real`, `con_desnivel` | Vano real *b* = √(a² + d²) [m], y si el desnivel llega a `DESNIVEL_MINIMO` |
 
-**Con desnivel**, las tensiones de las tablas cambian de significado: `T0_daN` es la tensión **Tm en el punto medio del vano** y `Tmax_daN` es la tensión **T_B en el apoyo más alto**. A partir de `DESNIVEL_MINIMO` (1 m), el EDS y el CHS se comprueban con T_B, como el viento y el hielo. Por debajo, igual que en un vano a nivel.
+Si un vano es **inviable** (ninguna tensión cumple el límite de alguna hipótesis con ese conductor), `resolver()` da un error que dice en qué hipótesis y por cuánto.
+
+**Con desnivel**, las tensiones de las tablas cambian de significado: `T0_daN` es la tensión **Tm en el punto medio del vano** y `Tmax_daN` es la tensión **T_B en el apoyo más alto**. A partir de `DESNIVEL_MINIMO` (1 m), el EDS y el CHS se comprueban con T_B, como el viento y el hielo. Por debajo, el vano se calcula exactamente igual que a nivel.
 
 ---
 
@@ -312,7 +320,7 @@ Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dat
 
 ## Validación
 
-- **Modelos eléctricos:** coinciden con la hoja de cálculo de la asignatura (`Lineas_de_Alta_tension.xlsx`).
+- **Modelos eléctricos:** coinciden con la hoja de cálculo de la asignatura corregida por el profesor (`Lineas_de_Alta_tension.xlsx`, con b = 2,7·10⁻⁶ S/km): los 8 resultados, las constantes ABCD, V₀ e I₀ de los cuatro modelos, con diferencias del orden de 10⁻¹³.
 - **Cálculo mecánico a nivel:** reproduce el ejemplo de clase *«Cálculo mecánico de un vano a nivel»* con diferencias menores de 1 daN, debidas al redondeo del ejemplo.
 - **Cálculo mecánico a desnivel:** reproduce el estado inicial del ejercicio de clase *«Cálculo mecánico de vano desnivelado»*: b = 230,87 m y Tm = 740,66 daN.
 - **Límites EDS y CHS del enunciado:** reproduce la tabla del conductor del ejemplo *«Cálculo mecánico de apoyos de una línea aérea de 3ª categoría»* (SJR005: LA-110, zona C, EDS 8,7 %, CHS 15,9 %) en sus tres cantones, con diferencias menores del 0,6 %. Cada cantón se calcula con su vano de regulación y su mayor desnivel.

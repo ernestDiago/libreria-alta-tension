@@ -1,0 +1,384 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage[table]{xcolor}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+% --- Colores y estilos -------------------------------------------------------
+\definecolor{alta}{HTML}{B03A2E}
+\definecolor{media}{HTML}{D68910}
+\definecolor{baja}{HTML}{2874A6}
+\definecolor{dudoso}{HTML}{7F8C8D}
+\definecolor{ok}{HTML}{1E8449}
+\definecolor{fondo}{HTML}{F4F6F7}
+\definecolor{titulo}{HTML}{1F4E79}
+
+\newcommand{\alta}{\textcolor{alta}{\textbf{Alta}}}
+\newcommand{\media}{\textcolor{media}{\textbf{Media}}}
+\newcommand{\baja}{\textcolor{baja}{\textbf{Baja}}}
+\newcommand{\dudoso}{\textcolor{dudoso}{\textbf{Dudoso}}}
+\newcommand{\code}[1]{\texttt{#1}}
+\setlength{\emergencystretch}{3em}  % evita que el texto en \code se salga del margen
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{fondo},
+  frame=single, rulecolor=\color{fondo},
+  keywordstyle=\color{titulo}\bfseries,
+  commentstyle=\color{dudoso}\itshape,
+  stringstyle=\color{ok},
+  columns=fullflexible, keepspaces=true,
+  breaklines=true, showstringspaces=false,
+  inputencoding=utf8, extendedchars=true,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {ñ}{{\~n}}1 {º}{{\textordmasculine}}1 {→}{{$\rightarrow$}}1
+           {≤}{{$\le$}}1 {≥}{{$\ge$}}1 {·}{{$\cdot$}}1 {−}{{-}}1
+}
+
+\newtcolorbox{arreglo}{colback=ok!6, colframe=ok!70!black, boxrule=0.4pt,
+  left=6pt, right=6pt, top=3pt, bottom=3pt, title=Propuesta de arreglo,
+  fonttitle=\bfseries\small, coltitle=white}
+
+\titleformat{\section}{\Large\bfseries\color{titulo}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Revisión de \code{calculoMecanico}}
+\rhead{\small Librería de Alta Tensión}
+\cfoot{\small\thepage}
+
+\newcommand{\fallo}[4]{%
+  \subsection[#1. #2]{#1. #2}
+  \noindent\textbf{Gravedad:} #3 \quad \textbf{Dónde:} #4\par\medskip}
+
+\begin{document}
+
+% =============================================================================
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries\color{titulo} Revisión de la clase\\[0.3em] \code{calculoMecanico}\par}
+\vspace{1cm}
+{\Large Librería de Alta Tensión\par}
+\vspace{0.4cm}
+{\large Generación, Distribución y Utilización de la Energía Eléctrica (Máster)\par}
+\vspace{2.5cm}
+\begin{tcolorbox}[colback=fondo, colframe=titulo, width=0.85\textwidth]
+\centering
+\begin{tabular}{ll}
+\textbf{Archivo revisado} & \code{alta\_tension.py} (clases \code{calculoMecanico},\\
+                          & \code{Linea} y \code{Conductor})\\[0.3em]
+\textbf{Revisores}        & 3 agentes independientes: reglamento,\\
+                          & métodos numéricos y robustez del código\\[0.3em]
+\textbf{Casos probados}   & más de 60\,000 combinaciones\\[0.3em]
+\textbf{Verificación}     & todos los fallos se han reproducido\\
+                          & de nuevo antes de incluirlos
+\end{tabular}
+\end{tcolorbox}
+\vfill
+{\large 20 de noviembre de 2026\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Resumen}
+
+La revisión la han hecho tres revisores independientes, cada uno con un enfoque:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Reglamento:} comparación del código con la ITC-LAT-07 y con el Tema 9, el ejercicio de vano desnivelado y el ejemplo SJR005.
+  \item \textbf{Métodos numéricos:} ecuación de cambio de condiciones, búsqueda de la hipótesis dominante, catenaria y desnivel, con barridos de miles de combinaciones de conductor, vano, desnivel, zona y tensión.
+  \item \textbf{Robustez:} casos límite, datos inválidos, mensajes de error y resultados que se quedan desactualizados.
+\end{itemize}
+
+\begin{tcolorbox}[colback=ok!6, colframe=ok!70!black, title=Conclusión principal, fonttitle=\bfseries]
+\textbf{Con vanos de hasta 500\,m el cálculo es correcto}, a nivel y a desnivel: ninguna hipótesis supera su límite, la dominante queda siempre justo en el suyo, no aparecen valores negativos ni \code{nan}, y se reproducen los ejemplos de clase. Los fallos de cálculo se concentran en los \textbf{vanos de más de 500\,m} (catenaria). El resto son problemas de \textbf{validación de datos}, de \textbf{mensajes de error} y de \textbf{objetos que se modifican después de crearlos}.
+\end{tcolorbox}
+
+\subsection*{Tabla de fallos}
+
+\renewcommand{\arraystretch}{1.25}
+\begin{longtable}{>{\bfseries}l l p{10.2cm}}
+\toprule
+\textbf{Id} & \textbf{Gravedad} & \textbf{Descripción} \\
+\midrule
+\endhead
+\multicolumn{3}{l}{\textit{Fallos de cálculo}}\\
+F1 & \alta  & Con vano $>500$\,m la hipótesis dominante supera su límite (hasta un 7\,\%). \\
+F2 & \media & Salto brusco de la flecha y de la dominante en vano $=500$\,m cuando hay desnivel. \\
+F3 & \media & La búsqueda de la dominante devuelve un resultado sin comprobar si no converge. \\
+F4 & \media & Un vano inviable da un resultado que incumple el límite o un error incomprensible. \\
+\midrule
+\multicolumn{3}{l}{\textit{Datos que se quedan desactualizados}}\\
+F5 & \media & Cambiar \code{vano} o \code{desnivel} tras crear el cálculo deja resultados viejos. \\
+F6 & \media & Cambiar una \code{Linea} o un \code{Conductor} tras crearlos no actualiza lo que se deduce de ellos. \\
+\midrule
+\multicolumn{3}{l}{\textit{Validación de datos y mensajes de error}}\\
+F7 & \media & Se aceptan datos imposibles: vano $\le 0$, coeficiente $\le 0$, E $\le 0$, tensión o altitud negativas. \\
+F8 & \baja  & Se acepta un coeficiente de seguridad menor que el mínimo de 2,5 del reglamento. \\
+F9 & \baja  & \code{Conductor} no funciona con los CSV de AL1 y AL2. \\
+F10 & \baja & Un conductor que no existe da un \code{KeyError} sin explicación. \\
+F11 & \baja & \code{exportar\_excel} y \code{tabla\_tendido} fallan con listas de temperaturas raras; el Excel no guarda el desnivel. \\
+\midrule
+\multicolumn{3}{l}{\textit{Reglamento y funcionalidad}}\\
+F12 & \baja & La temperatura de la hipótesis de flecha máxima es fija; el reglamento la da como mínimo. \\
+D1--D4 & \dudoso & Puntos a confirmar con el profesor (sección~\ref{sec:dudosos}). \\
+\bottomrule
+\end{longtable}
+
+En todos los ejemplos se usa
+\begin{lstlisting}
+import alta_tension as at
+cable = at.Conductor("LA 56", E_dato=7949, alfa_dato=19.1e-6)
+L = at.Linea(Un=20, alt=600, Vv=130)
+\end{lstlisting}
+
+% =============================================================================
+\section{Fallos de cálculo}
+
+\fallo{F1}{Con vano de más de 500\,m la hipótesis dominante supera su límite}{\alta}{\code{\_T0\_desde\_Tmax} (l.~403), \code{\_Tmax} (l.~416), \code{\_flecha} (l.~429)}
+
+\textbf{Qué pasa.} Para poner una hipótesis justo en su límite, \code{\_T0\_desde\_Tmax} despeja $T_0$ con la fórmula de la \textbf{parábola}. Pero después \code{\_Tmax} vuelve a calcular la tensión máxima con la flecha de \code{\_flecha}, que con vanos de más de 500\,m usa la \textbf{catenaria}. Las dos fórmulas dejan de ser una la inversa de la otra, y la hipótesis que debía quedar ``en su límite'' lo supera.
+
+\textbf{Ejemplos} (reproducidos):
+\begin{lstlisting}
+c = at.calculoMecanico(at.Conductor("LA 56"), L, vano=800)
+c.resolver().loc["hielo", "Tmax_daN"]                  # 546.66 > límite 543.00
+c._Tmax(c._T0_desde_Tmax(543.0, c._p_hielo()), c._p_hielo())   # 546.66, no 543
+
+c = at.calculoMecanico(at.Conductor("LA 180"), at.Linea(Un=132, alt=1200), vano=900)
+# hielo: Tmax = 2600.35 daN > límite 2597.60 daN
+
+c = at.calculoMecanico(at.Conductor("LA 30"), at.Linea(Un=66, alt=1200), vano=501)
+# hielo: 41.62 % de la rotura, con un límite del 40 %
+\end{lstlisting}
+
+\textbf{Alcance.} Con vanos de hasta 500\,m no hay ningún caso que supere el límite. Con más de 500\,m el límite se supera en un tercio de los casos sin desnivel y en tres cuartas partes con desnivel. En conductores habituales el exceso es del orden del 0,1--0,3\,\%; en conductores pequeños llega al \textbf{7\,\%} (LA\,78, 20\,kV, 1200\,m, vano 700\,m, desnivel 50\,m).
+
+\begin{arreglo}
+Con vano $>500$\,m, obtener $T_0$ invirtiendo numéricamente la misma \code{\_Tmax} que se usa después (por ejemplo, con el método de la bisección o \code{scipy.optimize.brentq} en la rama de tensiones altas). Así las dos funciones vuelven a ser exactamente inversas.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F2}{Salto de la flecha en vano $=500$\,m cuando hay desnivel}{\media}{\code{\_flecha\_exacta} (l.~420) frente a \code{\_flecha\_aprox} (l.~425)}
+
+\textbf{Qué pasa.} La flecha aproximada (vanos de hasta 500\,m) usa el vano real $b=\sqrt{a^2+d^2}$, pero la catenaria (vanos mayores) usa el vano proyectado $a$ y no tiene en cuenta el desnivel. Con desnivel, al cruzar los 500\,m la flecha salta.
+
+\begin{lstlisting}
+cab = at.Conductor("LA 180")
+for v in (499.999, 500.001):
+    at.calculoMecanico(cab, at.Linea(Un=66, alt=300), vano=v, desnivel=200).flecha_maxima
+# 28.36 m  ->  24.53 m   (-13.5 % por mover el vano 2 mm)
+# Sin desnivel el salto es pequeño: 22.52 -> 22.58 m
+\end{lstlisting}
+
+Además, por el mismo motivo que F1, la dominante deja de quedar en su límite: con desnivel de 200\,m pasa de un ratio de 1,000 a 0,989.
+
+\begin{arreglo}
+Usar en la catenaria la misma geometría que en la parábola (con el vano real $b$, o con la catenaria entre apoyos a distinta altura). Como mínimo, documentar la limitación en el aviso que se emita para vanos $>500$\,m con desnivel.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F3}{La búsqueda de la dominante no comprueba si ha convergido}{\media}{\code{\_hipotesis\_dominante} (l.~507--527)}
+
+\textbf{Qué pasa.} El bucle da como mucho una vuelta por hipótesis. Si las agota sin encontrar una hipótesis que cumpla todos los límites, devuelve la última de partida (l.~527) \textbf{sin avisar}. Con la parábola siempre converge (está demostrado que cada hipótesis se usa a lo sumo una vez), pero con la catenaria (F1) se queda reiniciando desde la misma hipótesis:
+\begin{lstlisting}
+# Hipótesis de partida en cada vuelta (5 limitantes):
+['EDS', 'hielo', 'hielo', 'hielo', 'hielo', 'hielo']
+\end{lstlisting}
+
+\begin{arreglo}
+Al terminar, comprobar que ninguna hipótesis supera su límite (con una pequeña tolerancia). Si alguna lo supera, lanzar un error que diga cuál y en qué porcentaje.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F4}{Un vano inviable no se detecta bien}{\media}{\code{\_T0\_desde\_Tmax} (l.~412)}
+
+\textbf{Qué pasa.} Hay combinaciones de conductor, vano y desnivel para las que \textbf{ninguna tensión} cumple el límite: con la parábola, la tensión máxima nunca baja de $b\,p/\sqrt2 + p\,|d|/2$. En ese caso:
+\begin{itemize}[leftmargin=1.5em]
+  \item con la parábola, la raíz cuadrada recibe un número negativo y sale \code{ValueError: math domain error}, que no explica nada;
+  \item con la catenaria, se devuelve un resultado que incumple el límite \textbf{sin avisar}.
+\end{itemize}
+\begin{lstlisting}
+at.calculoMecanico(at.Conductor("LA 30"), at.Linea(Un=20, alt=1200),
+                   vano=350, desnivel=150).resolver()
+# ValueError: math domain error
+# (en hielo, la T_B mínima posible es 367.6 daN > límite 324.7 daN)
+
+c = at.calculoMecanico(at.Conductor("LA 56"), at.Linea(Un=66, alt=1200), vano=700)
+c.resolver()     # sin error, pero el hielo queda al 104.8 % de su límite
+\end{lstlisting}
+
+\begin{arreglo}
+Antes de calcular, comprobar si el límite es alcanzable. Si no lo es, lanzar un error claro: \emph{``Vano inviable con el LA\,30: en la hipótesis de hielo la tensión máxima mínima posible es 367,6\,daN y el límite es 324,7\,daN''}.
+\end{arreglo}
+
+% =============================================================================
+\section{Datos que se quedan desactualizados}
+
+\fallo{F5}{Modificar el cálculo después de crearlo deja resultados viejos}{\media}{\code{\_\_post\_init\_\_} (l.~328), \code{flecha\_maxima} (l.~599)}
+
+\textbf{Qué pasa.} \code{vano\_real} y \code{con\_desnivel} solo se calculan al crear el objeto, y \code{flecha\_maxima} reutiliza \code{self.resultados} si ya existe. Si después se cambia el vano o el desnivel, los resultados mezclan datos nuevos y viejos.
+\begin{lstlisting}
+c = at.calculoMecanico(cable, L, vano=170)
+c.flecha_maxima          # 5.257 m
+c.vano = 300
+c.flecha_maxima          # 5.257 m   (un cálculo nuevo con vano 300 da 15.973 m)
+\end{lstlisting}
+Además, \code{c.dominante} no existe hasta que se llama a \code{resolver()}, y \code{tabla\_tendido()} calcula la dominante pero no la guarda.
+
+\begin{arreglo}
+Calcular \code{vano\_real} y \code{con\_desnivel} con \code{@property}, y hacer que \code{flecha\_maxima} y \code{dominante} recalculen siempre (o guarden en caché junto con los datos con que se calcularon). Otra opción más sencilla: declarar las clases con \code{@dataclass(frozen=True)} para que no se puedan modificar después de crearlas.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F6}{Modificar una \code{Linea} o un \code{Conductor} no actualiza lo que se deduce de ellos}{\media}{\code{Linea.\_\_post\_init\_\_} (l.~267), \code{Conductor.\_\_post\_init\_\_} (l.~189)}
+
+\textbf{Qué pasa.} La zona, la categoría, el coeficiente de seguridad y el límite del EDS se calculan una sola vez al crear la \code{Linea}. Si después se cambia, por ejemplo, la altitud, se sigue calculando con la zona antigua y \textbf{sin volver a comprobar} los datos. Como todos los cálculos que comparten esa \code{Linea} apuntan al mismo objeto, el cambio afecta a todos. Con \code{Conductor} pasa lo mismo con \code{E\_dato} y \code{alfa\_dato}.
+\begin{lstlisting}
+c = at.calculoMecanico(cable, L, vano=170)
+L.alt = 1200; L.Un = 132
+L.Zona, L.categoria, L.coef        # 'B', 'normal', 3   (deberían ser 'C', 'normal', 2.5)
+L.eds = 0.10                       # se acepta sin comprobar; limite_eds sigue en 0.15
+\end{lstlisting}
+
+\begin{arreglo}
+Igual que en F5: convertir los datos deducidos en \code{@property} (se calculan cada vez que se consultan) o hacer las clases inmutables con \code{frozen=True}.
+\end{arreglo}
+
+% =============================================================================
+\section{Validación de datos y mensajes de error}
+
+\fallo{F7}{Se aceptan datos imposibles}{\media}{\code{Linea}, \code{Conductor} y \code{calculoMecanico}}
+
+Ninguno de estos datos da un error al crear el objeto:
+
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Dato} & \textbf{Qué pasa} \\
+\midrule
+\code{vano=-170}            & Da los mismos resultados que con 170\,m. \\
+\code{vano=0}               & \code{ValueError: max() iterable argument is empty}. \\
+\code{coef\_seguridad=-3}   & Límites de rotura del $-33$\,\%; siempre ``manda'' el EDS. \\
+\code{coef\_seguridad=0}    & \code{ZeroDivisionError} al calcular. \\
+\code{E\_dato=0}            & La misma tensión en todas las hipótesis. \\
+\code{E\_dato=-7000}        & \code{ValueError: max() iterable argument is empty}. \\
+\code{Un=-20}, \code{alt=-600}, \code{Vv=-200} & Se aceptan (zona A, categoría normal\ldots). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{arreglo}
+Comprobar los datos al crear los objetos, como ya se hace con \code{eds}, \code{chs} y \code{alfa\_dato}: \code{ValueError} con un mensaje claro si vano $\le 0$, E $\le 0$, coeficiente $\le 0$, Un $\le 0$, altitud $<0$ o viento $\le 0$.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F8}{Se acepta un coeficiente de seguridad menor que el del reglamento}{\baja}{\code{Linea} (l.~295)}
+
+La ITC-LAT-07 (apartado 3.2.1, diap.~76 del Tema~9) exige que la tracción máxima no supere la carga de rotura dividida por 2,5. Sin embargo, \code{Linea(Un=20, alt=300, coef\_seguridad=2.0)} se acepta sin aviso.
+
+\begin{arreglo}
+Lanzar un error, o al menos un aviso (\code{warnings.warn}), si \code{coef\_seguridad} $<2{,}5$.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F9}{\code{Conductor} no funciona con los CSV de AL1 y AL2}{\baja}{\code{Conductor.\_\_post\_init\_\_} (l.~189--215)}
+
+\code{Conductor("L 56", archivo=".../conductores\_AL1.csv")} da \code{KeyError: 'seccion\_total\_mm2'}. Esos CSV no tienen las columnas de sección por material, número de alambres de acero, hielo y manguito. Además, la tabla \code{PROPIEDADES} se consulta siempre, aunque se den \code{E\_dato} y \code{alfa\_dato}.
+
+\begin{arreglo}
+Admitir los conductores homogéneos (tomando la sección de \code{seccion\_mm2} y exigiendo \code{E\_dato} y \code{alfa\_dato}), o avisar claramente de que solo se admiten conductores AL1/ST1A.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F10}{Un conductor que no existe da un error sin explicación}{\baja}{\code{Conductor.\_\_post\_init\_\_}}
+
+\code{Conductor("LA 999")} o \code{Conductor("LA~~56")} (con dos espacios) dan \code{KeyError: 'LA 999'}, sin indicar qué nombres son válidos.
+
+\begin{arreglo}
+\code{ValueError} con la lista de conductores disponibles en el CSV.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\fallo{F11}{Problemas menores de \code{exportar\_excel} y \code{tabla\_tendido}}{\baja}{l.~585 y l.~612}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{exportar\_excel(ruta, temperaturas=[])} da \code{TypeError: 'int' object is not iterable} al calcular el ancho de las columnas de una tabla vacía.
+  \item \code{tabla\_tendido(5)} o \code{tabla\_tendido(None)} dan \code{TypeError} sin decir que se espera una lista de temperaturas.
+  \item La hoja ``Datos'' del Excel no incluye el \textbf{desnivel} ni el \textbf{vano real}: un cálculo con desnivel no se distingue de uno a nivel.
+  \item Se acepta cualquier extensión (\code{"a.xls"}) y se escribe un \code{.xlsx} con ese nombre.
+\end{itemize}
+
+\begin{arreglo}
+Comprobar el argumento \code{temperaturas}, añadir el desnivel y el vano real a la hoja ``Datos'' y avisar si la extensión no es \code{.xlsx}.
+\end{arreglo}
+
+% =============================================================================
+\section{Reglamento y funcionalidad}
+
+\fallo{F12}{La temperatura de la flecha máxima es fija}{\baja}{\code{\_hipotesis\_resultado} (l.~479)}
+
+El Tema~9 (diap.~81) dice que la hipótesis de temperatura se calcula a ``la temperatura previsible según la intensidad nominal'', que \emph{no será inferior} a 50\,ºC (85\,ºC en categoría especial). Es un \textbf{mínimo}, pero el código usa siempre exactamente 50 u 85\,ºC.
+
+\begin{arreglo}
+Añadir a \code{Linea} un dato opcional \code{temperatura\_maxima} (por defecto, 50 u 85\,ºC según la categoría) y comprobar que no sea menor que el mínimo del reglamento.
+\end{arreglo}
+
+% -----------------------------------------------------------------------------
+\subsection{Puntos dudosos (a confirmar con el profesor)}
+\label{sec:dudosos}
+
+\begin{description}[leftmargin=1.5em, style=nextline]
+  \item[D1. Sobrecarga de hielo + viento en zona C] El código aplica el viento de 60\,km/h sobre el manguito de hielo de la \textbf{zona C}. La tabla del Tema~9 (diap.~70) usa el viento calculado sobre el manguito de la \textbf{zona B} (por ejemplo, LA\,110: 1,829\,daN/m en la tabla frente a 1,877\,daN/m del código). El código parece físicamente correcto y la tabla podría tener una errata, pero conviene confirmarlo. Solo afecta a líneas de categoría especial en zona C.
+  \item[D2. Desnivel por debajo de 1\,m] \code{\_Tmax} suma $p\,|d|/2$ aunque el desnivel sea menor que \code{DESNIVEL\_MINIMO}. El efecto es despreciable, pero no es del todo coherente con ese umbral.
+  \item[D3. Coeficiente de seguridad 3 por defecto] Solo se aplica entre 15 y 20\,kV. La excepción de la 4ª hipótesis de apoyos (ITC-LAT-07 3.5.3) tiene más condiciones (carga de rotura $<6600$\,daN, etc.), así que conviene documentar mejor cuándo es adecuado el 3.
+  \item[D4. Sobrecarga de hielo mayor] El reglamento podría permitir al proyectista fijar sobrecargas de hielo mayores en zonas concretas. La librería no lo admite. No se ha podido verificar.
+\end{description}
+
+% =============================================================================
+\section{Lo que se ha comprobado y está bien}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Zonas} A ($<500$\,m), B (500--1000\,m, ambos incluidos) y C ($>1000$\,m); \textbf{categoría especial} desde 220\,kV; viento de referencia de 120 o 140\,km/h.
+  \item \textbf{Presión del viento} $q=60$ o $50\,(V/120)^2$ según el diámetro ($\le$ o $>16$\,mm), \textbf{viento excepcional} y \textbf{sobrecargas de hielo} $0{,}18\sqrt d$ y $0{,}36\sqrt d$. Hielo + viento en zona B coincide con la tabla.
+  \item \textbf{Temperaturas} de todas las hipótesis según la zona, y \textbf{dónde se aplica cada límite}: rotura sobre $T_{max}$; EDS (15/22\,\%) y CHS sobre $T_0$ (sobre $T_B$ con desnivel $\ge1$\,m).
+  \item \textbf{Hipótesis de flecha máxima, flecha mínima, desviación de cadena y tabla de tendido} según el temario.
+  \item \textbf{Ecuación de cambio de condiciones}: unidades correctas, siempre tiene exactamente una raíz real positiva, residuo y reversibilidad por debajo de $10^{-12}$ con vanos de 0,5 a 800\,m y saltos de temperatura de $-20$ a 85\,ºC.
+  \item \textbf{Búsqueda de la hipótesis dominante} con la parábola: converge siempre (cada hipótesis se usa a lo sumo una vez) y la dominante queda en su límite con un error menor que $10^{-6}$.
+  \item \textbf{Vano a desnivel}: \code{\_T0\_desde\_Tmax} es la inversa exacta de \code{\_Tmax}; el signo del desnivel no influye.
+  \item \textbf{Ejemplos de clase reproducidos}: vano a nivel (diferencias $<1$\,daN), tabla de tendido, ejercicio de vano desnivelado ($T_m=740{,}66$\,daN) y los 7 apoyos del SJR005.
+\end{itemize}
+
+% =============================================================================
+\section{Orden propuesto para los arreglos}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{F1, F3 y F4} juntos: invertir \code{\_Tmax} numéricamente con vanos $>500$\,m, comprobar al final que se cumplen todos los límites y detectar los vanos inviables con un error claro.
+  \item \textbf{F2}: coherencia de la catenaria con el desnivel.
+  \item \textbf{F5 y F6}: decidir entre \code{@property} y clases inmutables (\code{frozen=True}).
+  \item \textbf{F7, F8 y F10}: comprobaciones de datos y mensajes de error claros.
+  \item \textbf{F9, F11 y F12}: mejoras de funcionalidad.
+  \item \textbf{D1--D4}: preguntar al profesor antes de cambiar nada.
+\end{enumerate}
+
+Cada arreglo debería ir acompañado de un test que reproduzca el fallo, para comprobar que queda resuelto y que no vuelve a aparecer.
+
+\end{document}

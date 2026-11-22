@@ -52,7 +52,20 @@ El reglamento limita la tracción **máxima** (en los apoyos). Para obtener T₀
 
 $$T_0 = \frac{2T_{max} + \sqrt{4T_{max}^2 - 2a^2p^2}}{4}$$
 
-**En el código:** `_T0_desde_Tmax` y `_Tmax`.
+Con la catenaria (vanos de más de 500 m) no se puede despejar, así que `_T0_desde_Tmax` busca T₀ por **bisección** sobre la misma `_Tmax` que se usa después. Así las dos funciones son siempre exactamente inversas y la hipótesis que manda queda justo en su límite.
+
+### Vano inviable
+
+$T_{max}(T_0)$ primero baja y luego sube: con T₀ pequeña la flecha se dispara. Su valor mínimo es
+
+| | $T_0$ en el mínimo | $T_{max}$ mínima |
+|---|---|---|
+| Parábola | $\dfrac{b\,p}{2\sqrt2}$ | $\dfrac{b\,p}{\sqrt2} + \dfrac{p\lvert d\rvert}{2}$ |
+| Catenaria | $p\,h^*$, con $h^* = \dfrac{b}{2u^*}$ | $p\,h^*\cosh u^* + \dfrac{p\lvert d\rvert}{2}$ |
+
+donde $u^* = 1{,}19968$ es la solución de $u\tanh u = 1$. Si el límite de una hipótesis es menor que esa $T_{max}$ mínima, **ninguna tensión lo cumple**: el vano es inviable con ese conductor y se lanza un error que dice en qué hipótesis y por cuánto.
+
+**En el código:** `_T0_desde_Tmax`, `_Tmax` y `_Tmax_minima`.
 
 ## 3. Vano de regulación
 
@@ -64,14 +77,22 @@ La clase recibe directamente un único `vano`. Si tienes un cantón, calcula *a_
 
 ## 4. Sobrecargas
 
-| Caso | Fórmula | Método |
+Las sobrecargas solo dependen del cable, así que son métodos de `Conductor`. La velocidad del viento y la zona las elige `calculoMecanico` a partir de la `Linea`.
+
+| Caso | Fórmula | Método de `Conductor` |
 |---|---|---|
-| Peso propio | $p = \text{masa[kg/km]} \cdot 9{,}81 / 10\,000$ | `Conductor.p` |
-| Presión del viento | $q = 60\left(\frac{V}{120}\right)^2$ si $d \le 16$ mm; $q = 50\left(\frac{V}{120}\right)^2$ si $d > 16$ mm | `_q(v, d)` |
-| Viento | $p_v = q \cdot d$, con $p_t = \sqrt{p^2 + p_v^2}$ | `_pv`, `_p_viento` |
-| Hielo | $p_h = 0{,}18\sqrt{d}$ (zona B), $0{,}36\sqrt{d}$ (zona C), 0 (zona A), con $p_t = p + p_h$ | `_p_hielo` |
-| Hielo + viento | $p_t = \sqrt{(p + p_h)^2 + p_v'^2}$, con $p_v' = q(60\text{ km/h}) \cdot D$, donde *D* es el diámetro con manguito de hielo | `_sobrecarga_conjunta` |
-| Mitad de presión (desviación de cadenas) | $p_v/2$ a 120 km/h | `_p_viento_mitad` |
+| Peso propio | $p = \text{masa[kg/km]} \cdot 9{,}81 / 10\,000$ | `p` |
+| Presión del viento | $q = 60\left(\frac{V}{120}\right)^2$ si $d \le 16$ mm; $q = 50\left(\frac{V}{120}\right)^2$ si $d > 16$ mm | `presion_viento(v, d)` |
+| Viento | $p_v = q \cdot d$, con $p_t = \sqrt{p^2 + p_v^2}$ | `sobrecarga_viento(v)`, `p_total_viento(v)` |
+| Hielo | $p_h = 0{,}18\sqrt{d}$ (zona B), $0{,}36\sqrt{d}$ (zona C), 0 (zona A), con $p_t = p + p_h$ | `sobrecarga_hielo(zona)`, `p_total_hielo(zona)` |
+| Hielo + viento | $p_t = \sqrt{(p + p_h)^2 + p_v'^2}$, con $p_v' = q(60\text{ km/h}) \cdot D$, donde *D* es el diámetro con manguito de hielo | `p_total_hielo_viento(zona)` |
+| Mitad de presión (desviación de cadenas) | $p_v/2$ a 120 km/h | `p_total_viento(120, factor=0.5)` |
+
+```python
+cable = at.Conductor("LA 78")
+cable.p_total_viento(120)   # 0.728 daN/m
+cable.p_total_hielo("B")    # 0.871 daN/m
+```
 
 El viento de referencia es de **120 km/h**, o de **140 km/h** en líneas de categoría especial (≥ 220 kV).
 
@@ -123,7 +144,7 @@ La **zona** se obtiene de la altitud (A: < 500 m, B: 500–1000 m, C: > 1000 m) 
 | Hipótesis | Temperatura | Carga | Uso |
 |---|---|---|---|
 | Flecha máxima viento | 15 ºC | viento a 120 km/h | Altura de apoyos |
-| Flecha máxima temperatura | 50 ºC (85 ºC en categoría especial) | peso propio | Altura de apoyos |
+| Flecha máxima temperatura | 50 ºC (85 ºC en categoría especial), o la `temperatura_maxima` de la `Linea` si es mayor | peso propio | Altura de apoyos |
 | Flecha máxima hielo | 0 ºC | hielo (zonas B y C) | Altura de apoyos |
 | Flecha mínima | −5 / −15 / −20 ºC (A / B / C) | peso propio | Cruzamientos |
 | Desviación de cadena | −5 / −10 / −15 ºC | mitad de la presión del viento de 120 km/h | Distancias en apoyos |
@@ -144,6 +165,8 @@ No se sabe de antemano qué hipótesis limita. Se supone una y se comprueba:
 ```
 
 El ratio se compara en proporción y no en daN, porque cada hipótesis tiene un límite distinto.
+
+Se dan como mucho tantas vueltas como hipótesis, más una para comprobar el último reinicio. Si aun así alguna hipótesis se pasa de su límite, se lanza un error en lugar de devolver un resultado que no cumple.
 
 **En el código:** `_hipotesis_limitantes`, `_estado_inicial`, `_ratio`, `_hipotesis_dominante` y `resolver`.
 
@@ -183,25 +206,26 @@ Es una aproximación. La versión exacta usaría *b* con $T_m$ (o *a* con $T_0$ 
 
 En un vano desnivelado, el profesor comprueba también el EDS con $T_B$ (*«al ser el vano muy desnivelado, la condición se debe aplicar en el punto más elevado»*). Por eso, con desnivel, el EDS y el CHS pasan a comprobarse con $T_B$, como el viento y el hielo.
 
-Para que un desnivel minúsculo no cambie el criterio de golpe, esto solo se aplica a partir de **`DESNIVEL_MINIMO` = 1 m** (atributo `con_desnivel`). Por debajo, el EDS y el CHS se comprueban con $T_m$, como en un vano a nivel. Las fórmulas de 8.1 sí usan siempre el desnivel real, porque varían de forma continua y no producen saltos.
+Esto solo se aplica a partir de **`DESNIVEL_MINIMO` = 1 m** (atributo `con_desnivel`). Por debajo, el vano se calcula **del todo a nivel**: el EDS y el CHS se comprueban con $T_m$ y las fórmulas de 8.1 usan *d* = 0 y *b* = *a*.
 
-### 8.4 Limitación
+### 8.4 Catenaria con desnivel
 
-La flecha con la catenaria (vanos de más de 500 m) todavía usa el vano proyectado y no tiene en cuenta el desnivel.
+Con vanos de más de 500 m, la flecha de la catenaria se calcula también con el vano real *b*: $f = h\left(\cosh\frac{b}{2h} - 1\right)$, con $h = T_m/p$. Es la misma idea que la parábola de 8.1 (un vano a nivel de longitud *b* con la tensión $T_m$), así que al pasar de 500 m la flecha no salta: solo queda la pequeña diferencia entre parábola y catenaria (0,3–0,7 %), igual que en un vano a nivel.
 
 ## 9. Correspondencia con el código
 
 | Método | Qué hace |
 |---|---|
-| `Conductor.__post_init__` | Lee el CSV y obtiene p, d, S, rotura, E y α |
-| `Linea.__post_init__` | Calcula zona, categoría, viento de referencia y excepcional, coeficiente de seguridad y límite del EDS |
-| `calculoMecanico.__post_init__` | Calcula `vano_real` y `con_desnivel` |
-| `_q`, `_pv`, `_p_viento`, `_p_viento_mitad`, `_p_hielo`, `_sobrecarga_conjunta` | Sobrecargas (apartado 4) |
+| `Conductor.validar`, `Linea.validar`, `calculoMecanico.validar` | Comprueban los datos al crear el objeto y antes de cada cálculo |
+| `Conductor.datos`, `p`, `d`, `S`, `rotura`, `E`, `alfa` | Propiedades: datos del CSV (se recalculan si cambia el conductor) |
+| `Linea.Zona`, `categoria`, `v_ref`, `v_excepcional`, `coef`, `limite_eds`, `t_flecha_maxima` | Propiedades: datos deducidos de la línea |
+| `calculoMecanico.vano_real`, `con_desnivel` | Propiedades: vano real *b* y si hay desnivel |
+| `Conductor.presion_viento`, `sobrecarga_viento`, `p_total_viento`, `sobrecarga_hielo`, `p_total_hielo`, `p_total_hielo_viento` | Sobrecargas (apartado 4) |
 | `_cambio_condiciones` | Ecuación de cambio de condiciones (apartados 5 y 8.2) |
-| `_T0_desde_Tmax`, `_Tmax` | Conversión entre T₀ (o $T_m$) y T_max (o $T_B$) (apartados 2 y 8.1) |
+| `_T0_desde_Tmax`, `_Tmax`, `_Tmax_minima` | Conversión entre T₀ (o $T_m$) y T_max (o $T_B$), y vano inviable (apartados 2 y 8.1) |
 | `_flecha`, `_flecha_aprox`, `_flecha_exacta` | Flecha (apartados 2 y 8.1) |
 | `_hipotesis_limitantes`, `_hipotesis_resultado` | Listas de hipótesis según zona y categoría (apartados 6 y 8.3) |
-| `_hipotesis_dominante` | Algoritmo del apartado 7 |
+| `_hipotesis_dominante`, `dominante` | Algoritmo del apartado 7 |
 | `resolver` | Tabla con todas las hipótesis |
 | `tabla_tendido` | Tabla de tendido |
 | `flecha_maxima` | Mayor flecha de las hipótesis de flecha máxima |

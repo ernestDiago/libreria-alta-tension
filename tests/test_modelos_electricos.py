@@ -16,7 +16,23 @@ RESULTADOS_EXCEL = {
     "Intensidad en el origen [A]": 1082.531755,
     "Potencia activa en el origen [MW]": 603.375,
     "Pérdidas de potencia [MW]": 3.375,
+    "Pérdidas respecto a P0 [%]": 0.5593536358,
     "Caída de tensión aritmética [kV]": 15.28482997,
+    "Caída de tensión respecto a Uf [%]": 3.821207492,
+    "Intensidad de vacío [A]": 0,
+}
+
+# Excel corregido por el profesor, con b = 2,7·10⁻⁶ S/km (hoja main). En el Excel, ΔP/P0 y ΔU/Uf
+# están en tanto por uno; aquí se multiplican por 100 porque la librería los da en %
+EXCEL_CORREGIDO = {
+    "inductivo": (415.2848299661324, 1082.5317547305485, 603.375, 3.375,
+                  0.5593536357986327, 15.284829966132406, 3.821207491533102, 0),
+    "pi": (414.7685548338569, 1051.9766976953915, 603.2834795904, 3.2834795904000202,
+           0.5442681096835839, 14.76855483385691, 3.692138708464228, 49.85073910006338),
+    "T": (414.7575888330641, 1051.9604268455732, 603.281033865095, 3.281033865094969,
+          0.5438649121909359, 14.75758883306412, 3.68939720826603, 49.8830632579836),
+    "distribuidos": (414.7613555789937, 1051.9715717971421, 603.281245957274, 3.2812459572739954,
+                     0.5438998774224091, 14.761355578993687, 3.690338894748422, 49.86151657921373),
 }
 
 MODELOS = ["inductivo", "T", "pi", "distribuidos"]
@@ -42,6 +58,14 @@ def linea_con_b():
 def test_coincide_con_excel(linea_excel, modelo):
     resultado = getattr(linea_excel, modelo)()
     assert resultado == pytest.approx(RESULTADOS_EXCEL, rel=1e-8)
+
+
+@pytest.mark.parametrize("modelo", EXCEL_CORREGIDO)
+def test_coincide_con_excel_corregido(linea_con_b, modelo):
+    "Con susceptancia los cuatro modelos dan distinto, y cada uno coincide con el Excel"
+    resultado = getattr(linea_con_b, modelo)()
+    esperado = dict(zip(RESULTADOS_EXCEL, EXCEL_CORREGIDO[modelo]))
+    assert resultado == pytest.approx(esperado, rel=1e-10)
 
 
 def test_magnitudes_comunes(linea_excel):
@@ -99,5 +123,5 @@ def test_caracter_no_valido_da_error():
 
 def test_comparar_reune_los_cuatro_modelos(linea_con_b):
     tabla = linea_con_b.comparar()
-    assert tabla.shape == (5, 4)
+    assert tabla.shape == (8, 4)
     assert tabla["Modelo en Pi"].to_dict() == pytest.approx(linea_con_b.pi())
