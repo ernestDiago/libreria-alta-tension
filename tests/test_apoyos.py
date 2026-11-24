@@ -139,19 +139,17 @@ TENSIONES_SJR005 = pd.DataFrame(
     {"hielo": [1354, 1354, 1329, 1329, 1346, 1346], "viento": [840, 840, 838, 838, 833, 833]},
     index=["1-2", "2-3", "3-4", "4-5", "5-6", "6-7"],
 )
-PESOS_SJR005 = {
-    "peso_cadena_amarre": 10 + 2,
-    "peso_cadena_suspension": 8 + 1,
-    "peso_cruceta": 70,  # recta
-    "peso_cruceta_suspension": 56,  # bóveda
-    "brazo_cruceta": 1.75,
-}
+# Suspensiones: cruceta de bóveda en apoyo de chapa. Resto: cruceta recta en celosía
+SUSPENSION_SJR005 = at.Armado(peso_cruceta=56, peso_cadena=8 + 1, brazo=1.75, forma="chapa",
+                              b=1.365, c=0.985)
+AMARRE_SJR005 = at.Armado(peso_cruceta=70, peso_cadena=10 + 2, brazo=1.75)
+ARMADOS_SJR005 = {"suspensión": SUSPENSION_SJR005, "resto": AMARRE_SJR005}
 
 
 @pytest.fixture(scope="module")
 def apoyos_SJR005_resuelto():
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
-    return at.CalculoApoyos(cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005)
+    return at.CalculoApoyos(cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, armados=ARMADOS_SJR005)
 
 
 # (apoyo, hipótesis, esfuerzo) -> valor del PDF. En los apoyos de chapa (2, 4 y 6), T y L antes de
@@ -196,19 +194,22 @@ def test_gravivano_y_eolovano_SJR005(apoyos_SJR005_resuelto):
 def test_hipotesis_que_no_existen(apoyos_SJR005_resuelto, cable):
     with pytest.raises(ValueError, match="no hay 3ª hipótesis"):
         apoyos_SJR005_resuelto.hipotesis_desequilibrio(1)   # fin de línea
-    en_zona_A = at.CalculoApoyos(cable, at.Linea(Un=20, alt=300), **DATOS_EJERCICIO, **PESOS_SJR005)
+    en_zona_A = at.CalculoApoyos(cable, at.Linea(Un=20, alt=300), **DATOS_EJERCICIO, armados=ARMADOS_SJR005)
     with pytest.raises(ValueError, match="zona A"):
         en_zona_A.hipotesis_hielo(3)
 
 
 def test_datos_que_faltan_en_las_hipotesis(cable):
     sin_pesos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO, **DATOS_EJERCICIO)
-    with pytest.raises(ValueError, match="peso_cadena_amarre"):
+    with pytest.raises(ValueError, match="Falta el armado del apoyo 3"):
         sin_pesos.hipotesis_viento(3)
-    with pytest.raises(ValueError, match="brazo_cruceta"):
-        sin_pesos.hipotesis_rotura(3)
+    sin_brazo = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO,
+                                 armados=at.Armado(peso_cruceta=70, peso_cadena=12),
+                                 **DATOS_EJERCICIO)
+    with pytest.raises(ValueError, match="Falta el brazo"):
+        sin_brazo.hipotesis_rotura(3)
     con_pesos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), tensiones=TENSIONES_ENUNCIADO,
-                                 **DATOS_EJERCICIO, **PESOS_SJR005)
+                                 **DATOS_EJERCICIO, armados=ARMADOS_SJR005)
     with pytest.raises(ValueError, match="tramo 1-2"):   # el enunciado no da el vano 1-2
         con_pesos.hipotesis_viento(2)
 
@@ -235,9 +236,7 @@ RESUMENES_SJR005 = {
 def apoyos_SJR005_con_formas():
     cable = at.Conductor("LA 110", E_dato=8047, alfa_dato=17.8e-6)
     return at.CalculoApoyos(
-        cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, **PESOS_SJR005,
-        formas=["celosía", "chapa", "celosía", "chapa", "celosía", "chapa", "celosía"],
-        factor_chapa=at.factor_reduccion_chapa(b=1.365, c=0.985),   # cruceta de bóveda
+        cable, at.Linea(Un=20, alt=1200), tensiones=TENSIONES_SJR005, **SJR005, armados=ARMADOS_SJR005
     )
 
 
@@ -271,11 +270,54 @@ def test_hipotesis_aplicables_segun_datos(cable):
     assert "hielo" not in en_zona_A.hipotesis_aplicables(3)
 
 
-@pytest.mark.parametrize("formas, mensaje", [(["celosía"] * 3, "formas constructivas"),
-                                             ("hormigón", "desconocida")])
-def test_formas_incorrectas(cable, formas, mensaje):
+# --- Armados (cruceta + cadenas de cada tipo de apoyo)
+
+
+def test_armado_factor_de_chapa():
+    assert SUSPENSION_SJR005.factor_chapa == pytest.approx(1.286, abs=0.001)
+    assert AMARRE_SJR005.factor_chapa == 1   # celosía: no se reduce
+    assert at.Armado(peso_cruceta=56, peso_cadena=9, forma="chapa").factor_chapa == 1   # sin cotas
+
+
+def test_armado_por_tipo_y_resto(apoyos_SJR005_con_formas):
+    apoyos = apoyos_SJR005_con_formas
+    assert apoyos.armado(2) is SUSPENSION_SJR005     # suspensión
+    assert apoyos.armado(5) is AMARRE_SJR005         # amarre -> "resto"
+    assert apoyos.formas == ["celosía", "chapa", "celosía", "chapa", "celosía", "chapa", "celosía"]
+
+
+def test_un_armado_para_todos(cable):
+    armado = at.Armado(peso_cruceta=70, peso_cadena=12, brazo=1.75)
+    apoyos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), armados=armado, **DATOS_EJERCICIO)
+    assert all(apoyos.armado(n) is armado for n in range(1, 6))
+
+
+def test_claves_de_armados_escritas_de_cualquier_forma(cable):
+    armado = at.Armado(peso_cruceta=70, peso_cadena=12)
+    apoyos = at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), **DATOS_EJERCICIO,
+                              armados={"Fin de linea": armado, "AMARRE": armado, "Resto": armado})
+    assert isinstance(apoyos.armados, dict)
+    assert set(apoyos.armados) == {"fin de línea", "amarre", "resto"}
+
+
+@pytest.mark.parametrize(
+    "datos, mensaje",
+    [
+        (dict(forma="hormigón"), "desconocida"),
+        (dict(peso_cruceta=-70), "negativo"),
+        (dict(brazo=0), "brazo"),
+        (dict(forma="chapa", b=1.365), "da b y c"),
+    ],
+)
+def test_armados_incorrectos(datos, mensaje):
     with pytest.raises(ValueError, match=mensaje):
-        at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), formas=formas, **DATOS_EJERCICIO)
+        at.Armado(**{"peso_cruceta": 70, "peso_cadena": 12, **datos})
+
+
+def test_clave_de_armados_que_no_es_un_tipo(cable):
+    with pytest.raises(ValueError, match="no es un tipo de apoyo"):
+        at.CalculoApoyos(cable, at.Linea(Un=20, alt=600), **DATOS_EJERCICIO,
+                         armados={"torre": at.Armado(peso_cruceta=70, peso_cadena=12)})
 
 
 # --- Tensiones del enunciado
@@ -310,7 +352,7 @@ def test_tensiones_del_enunciado_mal_escritas(cable, tabla, mensaje):
 
 
 def test_esquema_devuelve_la_figura(apoyos):
-    fig = apoyos.esquema(mostrar=False)
+    fig = apoyos.esquema(guardar=False, mostrar=False)
     textos = [t.get_text() for t in fig.axes[0].texts]
     assert [str(i) for i in range(1, 6)] == [t for t in textos if t.isdigit()]   # nº de cada apoyo
     for vano in ["210 m", "270 m", "240 m"]:
@@ -321,7 +363,17 @@ def test_esquema_devuelve_la_figura(apoyos):
     plt.close(fig)
 
 
-def test_esquema_se_guarda(apoyos, tmp_path):
-    ruta = tmp_path / "esquema.png"
-    plt.close(apoyos.esquema(ruta=ruta, mostrar=False))
-    assert ruta.stat().st_size > 10_000
+def test_esquema_se_guarda_en_su_carpeta(apoyos, tmp_path):
+    carpeta = tmp_path / "esquemas"   # no existe: la crea
+    plt.close(apoyos.esquema(nombre="ejercicio", carpeta=carpeta, mostrar=False))
+    assert (carpeta / "ejercicio.png").stat().st_size > 10_000
+
+
+def test_esquema_se_muestra_por_defecto(apoyos, tmp_path, monkeypatch):
+    mostrado = []
+    monkeypatch.setattr(plt, "show", lambda: mostrado.append(True))
+    monkeypatch.chdir(tmp_path)   # la carpeta esquemas/ se crea en la carpeta de trabajo
+    assert apoyos.esquema() is None
+    assert mostrado == [True]
+    assert (tmp_path / "esquemas" / "esquema_apoyos.png").exists()
+    plt.close("all")

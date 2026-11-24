@@ -12,5 +12,5 @@ __pycache__/
 ~$*.xlsx
 *.onetoc2
 
-# Imagen que genera ejemplos.py
-esquema_apoyos.png
+# Imágenes que genera esquema()
+esquemas/

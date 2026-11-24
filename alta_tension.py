@@ -28,6 +28,7 @@ import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -202,10 +203,30 @@ def _leer_conductor(nombre: str, archivo) -> tuple[str, dict]:
     return candidatos[0], tabla.loc[candidatos[0]].to_dict()
 
 
+ARCHIVO_LA = str(CARPETA_CONDUCTORES / "conductores_AL1_ST1A.csv")
+
+# Nombres de los conductores LA del CSV. Sirven para que el editor (Pylance) muestre un
+# desplegable con ellos al escribir at.Conductor(" ... Si se añade uno al CSV, hay que añadirlo aquí
+# (un test comprueba que coinciden)
+NombreLA = Literal[
+    "LA 30",
+    "LA 56",
+    "LA 78",
+    "LA 110",
+    "LA 145",
+    "LA 180",
+    "LA 280 HAWK",
+    "LA 380 GULL",
+    "LA 455 CONDOR",
+    "LA 545 CARDINAL",
+    "LA 635 FINCH",
+]
+
+
 @dataclass
 class Conductor:
-    conductor: str  # nombre antiguo, ej: "LA 56"
-    archivo: str = str(CARPETA_CONDUCTORES / "conductores_AL1_ST1A.csv")
+    conductor: NombreLA | str  # nombre antiguo, ej: "LA 56" (ver Conductor.disponibles())
+    archivo: str = ARCHIVO_LA
     E_dato: float | None = (
         None  # módulo de elasticidad [daN/mm²] (si el enunciado lo da)
     )
@@ -216,6 +237,22 @@ class Conductor:
     def __post_init__(self):
         self._clave = None  # (conductor, archivo) con que se leyeron los datos
         self.validar()
+
+    @classmethod
+    def disponibles(cls, archivo: str = ARCHIVO_LA) -> pd.DataFrame:
+        """Tabla con los conductores del CSV y sus datos principales.
+        Es de clase (cls): se usa sin crear ningún conductor, at.Conductor.disponibles()"""
+        tabla = pd.read_csv(archivo, index_col="codigo_antiguo")
+        seccion = "seccion_total_mm2" if "seccion_total_mm2" in tabla else "seccion_mm2"
+        return pd.DataFrame(
+            {
+                "Designación": tabla["codigo"],
+                "Sección [mm²]": tabla[seccion],
+                "Diámetro [mm]": tabla["d_conductor_mm"],
+                "Peso [daN/m]": (tabla["masa_kg_km"] * 9.81 / 10_000).round(4),
+                "Rotura [daN]": (tabla["carga_rotura_kN"] * 100).round().astype(int),
+            }
+        ).rename_axis("Conductor")
 
     def validar(self):
         "Comprueba los datos. Se llama al crear el conductor y antes de cada cálculo mecánico"
@@ -1009,6 +1046,43 @@ def _normalizar(texto: str) -> str:
     return "".join(c for c in descompuesto if unicodedata.category(c) != "Mn")
 
 
+@dataclass(kw_only=True)  # kw_only: los datos se pasan siempre con su nombre (peso_cruceta=70...)
+class Armado:
+    """Lo que lleva montado un tipo de apoyo: la cruceta y las cadenas de aisladores, y la
+    forma del apoyo. Se crea uno por cada tipo de apoyo y se pasan a CalculoApoyos(armados=...)"""
+
+    peso_cruceta: float  # Peso de la cruceta [daN]
+    peso_cadena: float  # Peso de una cadena de aisladores con sus herrajes [daN]
+    brazo: float | None = None  # Distancia del conductor exterior al eje del apoyo [m] (4ª hipótesis)
+    forma: str = "celosía"  # Forma del apoyo: "celosía" (UNE 207017) o "chapa" (UNE 207018)
+    b: float | None = None  # Cotas de la cruceta de bóveda [m], para el factor de chapa
+    c: float | None = None
+    hc: float = 5.0  # Datos del fabricante para el factor de chapa [m] (ver factor_reduccion_chapa)
+    h0: float = 0.25
+
+    def __post_init__(self):
+        formas = {_normalizar(f): f for f in FORMAS_APOYO}
+        if _normalizar(self.forma) not in formas:
+            raise ValueError(f"Forma {self.forma!r} desconocida. Usa una de {FORMAS_APOYO}")
+        self.forma = formas[_normalizar(self.forma)]
+
+        for nombre in ("peso_cruceta", "peso_cadena"):
+            if not getattr(self, nombre) >= 0:
+                raise ValueError(f"{nombre}={getattr(self, nombre)}: no puede ser negativo [daN]")
+        if self.brazo is not None and not self.brazo > 0:
+            raise ValueError(f"brazo={self.brazo}: tiene que ser positivo [m]")
+        if (self.b is None) != (self.c is None):
+            raise ValueError("Las cotas de la cruceta de bóveda van juntas: da b y c")
+
+    @property
+    def factor_chapa(self) -> float:
+        """Factor por el que se multiplican T y L en los apoyos de chapa para llevarlos al punto
+        del fabricante. 1 en celosía, o en chapa si no se dan las cotas b y c"""
+        if self.forma == "chapa" and self.b is not None and self.c is not None:
+            return factor_reduccion_chapa(self.b, self.c, self.hc, self.h0)
+        return 1.0
+
+
 @dataclass
 class Canton:
     "Tramo entre dos apoyos con cadenas de amarre. Todos sus vanos tienen la misma tensión"
@@ -1044,26 +1118,10 @@ class CalculoApoyos:
     )
 
     # Datos de los apoyos para calcular los esfuerzos
+    armados: Armado | dict[str, Armado] | None = (
+        None  # Uno para todos, o {tipo de apoyo: Armado}; "resto" vale para los demás tipos
+    )
     n_conductores: int = 3  # Nº de conductores (3 en un circuito simplex)
-    peso_cadena_amarre: float | None = (
-        None  # Peso de una cadena de amarre con sus herrajes [daN]
-    )
-    peso_cadena_suspension: float | None = (
-        None  # Ídem de suspensión [daN]. None -> igual que la de amarre
-    )
-    peso_cruceta: float | None = None  # Peso de la cruceta [daN]
-    peso_cruceta_suspension: float | None = (
-        None  # Ídem en los de suspensión [daN]. None -> igual
-    )
-    brazo_cruceta: float | None = (
-        None  # Distancia del conductor exterior al eje del apoyo [m]
-    )
-    formas: str | list[str] = (
-        "celosía"  # Forma constructiva: una para todos o una por apoyo
-    )
-    factor_chapa: float = (
-        1.0  # Reducción de T y L en los de chapa, ver factor_reduccion_chapa()
-    )
     rotura: bool | None = None  # 4ª hipótesis: None -> según ITC-LAT-07 3.5.3
 
     def __post_init__(self):
@@ -1111,20 +1169,22 @@ class CalculoApoyos:
         self.posiciones = [float(x) for x in np.cumsum([0, *self.vanos])]
         self.cotas = [float(z) for z in np.cumsum(self.desniveles)]
 
-        # Forma constructiva de cada apoyo
-        if isinstance(self.formas, str):
-            self.formas = [self.formas] * self.n
-        if len(self.formas) != self.n:
-            raise ValueError(
-                f"Hay {self.n} apoyos pero {len(self.formas)} formas constructivas"
-            )
-        nombres_formas = {_normalizar(f): f for f in FORMAS_APOYO}
-        for numero, forma in enumerate(self.formas, start=1):
-            if _normalizar(forma) not in nombres_formas:
-                raise ValueError(
-                    f"Apoyo {numero}: forma {forma!r} desconocida. Usa una de {FORMAS_APOYO}"
-                )
-        self.formas = [nombres_formas[_normalizar(f)] for f in self.formas]
+        # Armados: las claves escritas de cualquier forma -> nombre del reglamento (o "resto")
+        if isinstance(self.armados, dict):
+            armados = {}
+            for clave, armado in self.armados.items():
+                if _normalizar(clave) == "resto":
+                    armados["resto"] = armado
+                elif _normalizar(clave) in nombres:
+                    armados[nombres[_normalizar(clave)]] = armado
+                else:
+                    raise ValueError(
+                        f"armados: {clave!r} no es un tipo de apoyo. Usa uno de {TIPOS_APOYO} o 'resto'"
+                    )
+            self.armados = armados
+        valores = self.armados.values() if isinstance(self.armados, dict) else [self.armados]
+        if not all(a is None or isinstance(a, Armado) for a in valores):
+            raise TypeError("armados: cada armado tiene que ser un at.Armado(...)")
 
         # Tramos ("1-2", "2-3"...) y cantones, cada uno con su cálculo mecánico
         self.tramos = [f"{k}-{k + 1}" for k in range(1, self.n)]
@@ -1268,18 +1328,38 @@ class CalculoApoyos:
         "Longitud de conductor cuyo viento soporta el apoyo [m]: Σ a/2"
         return sum(a / 2 for _, a, _, _ in self._lados(numero))
 
+    def armado(self, numero: int) -> Armado | None:
+        "Armado del apoyo: el de su tipo, o el de 'resto' (None si no se ha dado)"
+        if not isinstance(self.armados, dict):
+            return self.armados
+        tipo = self.tipos[numero - 1]
+        return self.armados.get(tipo, self.armados.get("resto"))
+
+    def _armado_obligatorio(self, numero: int) -> Armado:
+        "Armado del apoyo, con un error claro si falta"
+        armado = self.armado(numero)
+        if armado is None:
+            tipo = self.tipos[numero - 1]
+            raise ValueError(
+                f"Falta el armado del apoyo {numero} ({tipo}): pásalo en "
+                f"armados={{'{tipo}': at.Armado(...)}} o con la clave 'resto'"
+            )
+        return armado
+
+    @property
+    def formas(self) -> list[str]:
+        "Forma de cada apoyo (celosía si no tiene armado)"
+        formas = []
+        for numero in range(1, self.n + 1):
+            armado = self.armado(numero)
+            formas.append(armado.forma if armado is not None else "celosía")
+        return formas
+
     def _peso_cadenas_y_cruceta(self, numero: int) -> float:
         "Peso de las cadenas (con herrajes) y de la cruceta del apoyo [daN]"
-        if self.peso_cadena_amarre is None or self.peso_cruceta is None:
-            raise ValueError("Faltan los datos peso_cadena_amarre y peso_cruceta")
-        tipo = self.tipos[numero - 1]
-        cadena, cruceta = self.peso_cadena_amarre, self.peso_cruceta
-        if tipo == "suspensión":
-            if self.peso_cadena_suspension is not None:
-                cadena = self.peso_cadena_suspension
-            if self.peso_cruceta_suspension is not None:
-                cruceta = self.peso_cruceta_suspension
-        return self.n_conductores * CADENAS_POR_FASE[tipo] * cadena + cruceta
+        armado = self._armado_obligatorio(numero)
+        cadenas = self.n_conductores * CADENAS_POR_FASE[self.tipos[numero - 1]]
+        return cadenas * armado.peso_cadena + armado.peso_cruceta
 
     def _hipotesis_base(self) -> str:
         "Sobrecarga de la 3ª y 4ª hipótesis: hielo en zonas B y C, viento en zona A"
@@ -1378,8 +1458,9 @@ class CalculoApoyos:
         """4ª hipótesis: rotura del conductor exterior del vano con más tensión.
         Produce un momento torsor Mt = T·brazo. La fase rota sostiene la mitad de su vano, como
         en los ejemplos de clase (en fin de línea, nada)."""
-        if self.brazo_cruceta is None:
-            raise ValueError("Falta el dato brazo_cruceta")
+        brazo = self._armado_obligatorio(numero).brazo
+        if brazo is None:
+            raise ValueError(f"Falta el brazo en el armado del apoyo {numero}")
         tipo, n = self.tipos[numero - 1], self.n_conductores
         base = self._hipotesis_base()
         p = (
@@ -1396,7 +1477,7 @@ class CalculoApoyos:
             + p * a_g_fase_rota
             + self._peso_cadenas_y_cruceta(numero)
         )
-        Mt = ROTURA[tipo] * self._tension(tramo_roto, base) * self.brazo_cruceta
+        Mt = ROTURA[tipo] * self._tension(tramo_roto, base) * brazo
         return {"V": V, "T": None, "L": None, "Mt": Mt}
 
     #  TABLA DE ESFUERZOS PARA ELEGIR EL APOYO
@@ -1430,7 +1511,8 @@ class CalculoApoyos:
     def esfuerzos(self, numero: int) -> pd.DataFrame:
         """Resumen de esfuerzos del apoyo preparado para buscar en las tablas del fabricante.
         Celosía (UNE 207017): T y L juntos se suman en un esfuerzo horizontal, que se da como L.
-        Chapa (UNE 207018): T y L se multiplican por factor_chapa (punto de aplicación del fabricante).
+        Chapa (UNE 207018): T y L se multiplican por el factor_chapa del armado (punto de
+        aplicación del fabricante).
         Columnas: hipótesis; filas: V, T, L [daN] y Mt [daN·m]. NaN = no aplica."""
         metodos = {
             "viento": self.hipotesis_viento,
@@ -1439,7 +1521,8 @@ class CalculoApoyos:
             "rotura": self.hipotesis_rotura,
         }
         aplicables = self.hipotesis_aplicables(numero)
-        forma = self.formas[numero - 1]
+        armado = self._armado_obligatorio(numero)
+        forma, factor_chapa = armado.forma, armado.factor_chapa
 
         tabla = {}
         for nombre, columna in zip(metodos, NOMBRES_HIPOTESIS):
@@ -1448,8 +1531,8 @@ class CalculoApoyos:
             if forma == "celosía" and T is not None and L is not None:
                 T, L = None, T + L
             elif forma == "chapa":
-                T = T * self.factor_chapa if T is not None else None
-                L = L * self.factor_chapa if L is not None else None
+                T = T * factor_chapa if T is not None else None
+                L = L * factor_chapa if L is not None else None
             tabla[columna] = {"V": V, "T": T, "L": L, "Mt": Mt}
 
         return pd.DataFrame(tabla, index=["V", "T", "L", "Mt"], dtype=float)
@@ -1462,9 +1545,17 @@ class CalculoApoyos:
         fila = resultados[resultados.index.str.startswith("flecha temperatura")].iloc[0]
         return fila["T0_daN"] / fila["p_t_daN_m"]
 
-    def esquema(self, ruta=None, mostrar=True):
+    def esquema(
+        self,
+        nombre: str = "esquema_apoyos",
+        carpeta: str | Path = "esquemas",
+        guardar: bool = True,
+        mostrar: bool = True,
+    ):
         """Dibuja el perfil de la línea con los apoyos, los vanos y los desniveles.
-        ruta: si se da, guarda la imagen. mostrar=False devuelve la figura sin mostrarla."""
+        Por defecto lo guarda en carpeta/nombre.png, dentro de la carpeta de trabajo (la
+        del archivo que ejecutas), creándola si no existe, y lo muestra en pantalla.
+        guardar=False: no lo guarda. mostrar=False: no lo muestra y devuelve la figura."""
         import matplotlib.pyplot as plt
 
         x = np.array(self.posiciones)
@@ -1591,11 +1682,17 @@ class CalculoApoyos:
         )
         fig.tight_layout()
 
-        if ruta is not None:
+        if guardar:
+            carpeta = Path(carpeta)
+            carpeta.mkdir(parents=True, exist_ok=True)
+            ruta = carpeta / f"{nombre}.png"
             fig.savefig(ruta, dpi=150, bbox_inches="tight")
+            print(f"Esquema guardado en {ruta}")
         if mostrar:
+            # En la consola interactiva sale debajo del código; ejecutando el archivo en
+            # una terminal se abre una ventana y el programa sigue al cerrarla
             plt.show()
-            return None
+            return None  # sin devolver la figura, para que no salga dos veces
         return fig
 
     @staticmethod

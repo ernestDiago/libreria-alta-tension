@@ -73,7 +73,7 @@ En un cantón (el tramo entre dos apoyos de amarre) con varios vanos, la tracci�
 
 $$a_r = \sqrt{\frac{\sum a_i^3}{\sum a_i}}$$
 
-La clase recibe directamente un único `vano`. Si tienes un cantón, calcula *a_r* y pásalo como `vano`.
+`calculoMecanico` recibe directamente un único `vano`. Si tienes un cantón, calcula *a_r* y pásalo como `vano`, o usa `CalculoApoyos`, que divide la línea en cantones y lo hace solo (ver [`apoyos.md`](apoyos.md)).
 
 ## 4. Sobrecargas
 

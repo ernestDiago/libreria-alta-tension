@@ -6,7 +6,7 @@ Librería en Python con los cálculos de **líneas eléctricas de alta tensión*
 |---|---|---|
 | **Modelos eléctricos** | `Modelo` | Tensión, intensidad, potencia, pérdidas y caída de tensión en el origen de una línea con los modelos **inductivo**, **en T**, **en π** y de **parámetros distribuidos** |
 | **Cálculo mecánico** (Tema 9) | `Conductor`, `calculoMecanico` | Sobrecargas de viento y hielo, **hipótesis del RLAT** (ITC-LAT-07), tracciones, **flechas** y **tabla de tendido**, en vanos **a nivel** y **a desnivel** |
-| **Apoyos** (Tema 9) *(en desarrollo)* | `CalculoApoyos` | Datos de la línea apoyo a apoyo y **esquema** del perfil. El cálculo de esfuerzos está pendiente |
+| **Apoyos** (Tema 9) | `CalculoApoyos`, `Armado` | Cantones y tensiones de cada vano, las 4 hipótesis de cálculo, tabla de esfuerzos para elegir el apoyo y **esquema** del perfil |
 
 Todo está en un único archivo, [`alta_tension.py`](alta_tension.py).
 
@@ -70,6 +70,7 @@ Intensidad de vacío [A]                        0.000       49.883        49.851
 ```python
 import alta_tension as at
 
+at.Conductor.disponibles()                                     # tabla con los conductores del CSV
 cable = at.Conductor("LA 56")                                  # E y α típicos según composición
 cable = at.Conductor("LA 56", E_dato=7949, alfa_dato=19.1e-6)  # E y α del enunciado
 
@@ -84,7 +85,6 @@ calc.exportar_excel("calculo_mecanico_LA56.xlsx")
 ```
 
 ```
-Zona B, categoría normal, coef. seguridad 3
                          temp_C  p_t_daN_m  T0_daN  Tmax_daN  %_rotura  %_rotura_TB  flecha_m  limite_%
 hipotesis
 EDS                          15       0.19  146.46    147.31      8.99         9.04      4.57     15.00
@@ -123,13 +123,13 @@ flecha mínima                -5       0.27  332.19    342.94     14.37        1
 desviación cadena            -5       0.43  491.32    508.94     21.25        22.01      5.85       NaN
 ```
 
-El archivo [`ejemplos.py`](ejemplos.py) resuelve estos ejemplos completos y los de apoyos (con las tensiones del enunciado y calculándolas por cantones), cada uno en su propia función:
+El archivo [`ejemplos.py`](ejemplos.py) recorre la librería sección a sección (modelos, línea, conductores, cálculo mecánico, armados y apoyos), con los ejemplos de clase completos. Se ejecuta con F5 en la consola interactiva de VS Code o con:
 
 ```bash
 python ejemplos.py
 ```
 
-### Apoyos *(en desarrollo)*
+### Apoyos
 
 Se describe la línea apoyo a apoyo: el vano entre cada par de apoyos, el desnivel de cada apoyo **respecto al anterior** (el primero, 0), su tipo y, si los hay, los ángulos (por **número de apoyo**, empezando en 1).
 
@@ -144,17 +144,20 @@ apoyos = at.CalculoApoyos(
     tipos=["fin de línea", "amarre", "anclaje", "amarre", "fin de línea"],
     angulos={4: 45},                 # el apoyo 4 es de ángulo, 45º
 )
-apoyos.esquema()                     # o esquema(ruta="esquema.png") para guardarlo
+apoyos.esquema()                     # lo guarda en esquemas/esquema_apoyos.png y lo muestra
+apoyos.esquema(nombre="valle")       # -> esquemas/valle.png (guardar=False / mostrar=False)
 ```
 
 ![Esquema de la línea](docs/esquema_ejemplo.png)
 
-Tipos admitidos (`TIPOS_APOYO`): `principio de línea`, `fin de línea`, `suspensión`, `amarre` y `anclaje`, con o sin tildes ni mayúsculas. Los de suspensión, amarre y anclaje son de alineación salvo que tengan ángulo. #### Cantones y tensiones de cada vano
+Tipos admitidos (`TIPOS_APOYO`): `principio de línea`, `fin de línea`, `suspensión`, `amarre` y `anclaje`, con o sin tildes ni mayúsculas. Los de suspensión, amarre y anclaje son de alineación salvo que tengan ángulo.
+
+#### Cantones y tensiones de cada vano
 
 La línea se divide sola en **cantones**: se corta en todos los apoyos que no son de suspensión (amarre, anclaje, principio y fin de línea). Cada cantón se calcula con un `calculoMecanico` propio, con su **vano de regulación** $a_r = \sqrt{\sum a_i^3 / \sum a_i}$ y su **mayor desnivel**, y todos sus vanos comparten esa tensión.
 
 ```python
-apoyos.cantones              # [Canton(inicio=1, fin=3, vano_regulacion=155.24, desnivel=0), ...]
+apoyos.cantones              # [Canton(inicio=1, fin=3, vano_regulacion=155.24..., desnivel=0), ...]
 apoyos.calculo_vano(1)       # calculoMecanico del cantón del vano 2-3
 apoyos.tensiones             # T0 (Tm si hay desnivel) de cada vano en cada hipótesis
 ```
@@ -172,13 +175,16 @@ El cable de cada vano se dibuja en el esquema con la parábola de la hipótesis 
 
 #### Hipótesis de cálculo (ITC-LAT-07 3.5.3)
 
-Necesitan los pesos de cadenas y crucetas y, para la 4ª, el brazo de la cruceta:
+Necesitan lo que lleva montado cada apoyo: un **`Armado`** con el peso de la cruceta, el de una cadena de aisladores (con herrajes) y, para la 4ª, el brazo. Se pasa uno para todos los apoyos o uno por tipo de apoyo, con `"resto"` para los demás tipos:
 
 ```python
-apoyos = at.CalculoApoyos(cable, linea, ..., tensiones=tensiones,
-                          peso_cadena_amarre=12,        # cadena + herrajes [daN]
-                          peso_cruceta=70,              # [daN]
-                          brazo_cruceta=1.75)           # conductor exterior - eje [m]
+armado = at.Armado(peso_cruceta=70, peso_cadena=12, brazo=1.75)
+apoyos = at.CalculoApoyos(cable, linea, ..., tensiones=tensiones, armados=armado)
+
+# Uno por tipo: suspensiones de chapa con cruceta de bóveda y el resto de celosía
+suspension = at.Armado(peso_cruceta=56, peso_cadena=9, brazo=1.75, forma="chapa", b=1.365, c=0.985)
+amarre = at.Armado(peso_cruceta=70, peso_cadena=12, brazo=1.75)
+apoyos = at.CalculoApoyos(cable, linea, ..., armados={"suspensión": suspension, "resto": amarre})
 
 apoyos.hipotesis_viento(4)        # {'V': 618.2, 'T': 4642.3, 'L': None, 'Mt': None}
 apoyos.hipotesis_hielo(4)         # 2ª: solo zonas B y C
@@ -198,14 +204,15 @@ apoyos.esfuerzos(4)
 # Mt        NaN       NaN               NaN        NaN
 ```
 
-- **Celosía** (UNE 207017, `formas="celosía"`, por defecto): cuando hay T y L, se suman en un único esfuerzo horizontal que se da como L.
-- **Chapa** (UNE 207018): T y L se multiplican por `factor_chapa`, que los lleva al punto donde los da el fabricante. Para una cruceta de bóveda: `factor_chapa=at.factor_reduccion_chapa(b, c)`.
-- `formas` puede ser una para todos o una lista con la de cada apoyo.
+- **Celosía** (UNE 207017, `forma="celosía"` en el armado, por defecto): cuando hay T y L, se suman en un único esfuerzo horizontal que se da como L.
+- **Chapa** (UNE 207018, `forma="chapa"`): T y L se multiplican por el factor de chapa, que los lleva al punto donde los da el fabricante. Si el armado tiene las cotas `b` y `c` de la cruceta de bóveda, lo calcula solo (`armado.factor_chapa`, con `at.factor_reduccion_chapa`); sin cotas vale 1.
 - **4ª hipótesis:** por defecto (`rotura=None`) se omite en suspensión y amarre si Un ≤ 66 kV, la carga de rotura del conductor es menor de 6600 daN y el coeficiente de seguridad es al menos 3 (ITC-LAT-07 3.5.3). Con `rotura=True` o `False` se fuerza.
 
 Validado con los 7 resúmenes de esfuerzos del ejemplo SJR005.
 
-Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de aplicación del fabricante: V vertical, T transversal, L longitudinal [daN] y Mt momento torsor [daN·m]. `None` significa que ese esfuerzo no aplica. Si los de suspensión llevan otras cadenas o crucetas, se indican con `peso_cadena_suspension` y `peso_cruceta_suspension`. Validado con los 7 apoyos del ejemplo SJR005 (39 valores, diferencias menores del 0,2 %).
+Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de aplicación del fabricante: V vertical, T transversal, L longitudinal [daN] y Mt momento torsor [daN·m]. `None` significa que ese esfuerzo no aplica. El número de cadenas por fase lo pone la librería según el tipo de apoyo (1 en suspensión y en los extremos, 2 en amarre y anclaje). Validado con los 7 apoyos del ejemplo SJR005 (39 valores, diferencias menores del 0,5 %).
+
+Las fórmulas de cada hipótesis están en [`docs/apoyos.md`](docs/apoyos.md).
 
 ---
 
@@ -242,6 +249,8 @@ Cada hipótesis por separado devuelve los esfuerzos **sin reducir** al punto de 
 **Atributos calculados** (propiedades, se actualizan solos si cambias el conductor, `E_dato` o `alfa_dato`): `datos` (fila completa del CSV), `nombre` (nombre en la tabla), `p` (peso propio, daN/m), `d` (diámetro, mm), `S` (sección, mm²), `rotura` (carga de rotura, daN), `E` y `alfa`.
 
 El nombre se puede escribir en minúsculas, con espacios de más o sin la palabra final (`"LA 280"` → `LA 280 HAWK`). Si no existe, el error dice qué conductores hay. Con los CSV de conductores homogéneos (`conductores_AL1.csv`, `conductores_AL2.csv`) hay que dar `E_dato` y `alfa_dato`, porque el temario no da valores típicos.
+
+`at.Conductor.disponibles()` devuelve una tabla con los conductores del CSV (designación, sección, diámetro, peso y rotura), sin crear ninguno. Al escribir `at.Conductor("` en VS Code, el editor sugiere los nombres de los LA (tipo `NombreLA`).
 
 ### `Linea`
 
@@ -285,6 +294,47 @@ Si un vano es **inviable** (ninguna tensión cumple el límite de alguna hipóte
 
 **Con desnivel**, las tensiones de las tablas cambian de significado: `T0_daN` es la tensión **Tm en el punto medio del vano** y `Tmax_daN` es la tensión **T_B en el apoyo más alto**. A partir de `DESNIVEL_MINIMO` (1 m), el EDS y el CHS se comprueban con T_B, como el viento y el hielo. Por debajo, el vano se calcula exactamente igual que a nivel.
 
+### `Armado`
+
+Lo que lleva montado un tipo de apoyo. Los datos se pasan siempre con su nombre.
+
+| Parámetro | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `peso_cruceta` | `float` | — | Peso de la cruceta [daN] |
+| `peso_cadena` | `float` | — | Peso de una cadena de aisladores con sus herrajes [daN] |
+| `brazo` | `float \| None` | `None` | Distancia del conductor exterior al eje del apoyo [m]. Solo hace falta para la 4ª hipótesis |
+| `forma` | `str` | `"celosía"` | Forma del apoyo: `"celosía"` o `"chapa"` |
+| `b`, `c` | `float \| None` | `None` | Cotas de la cruceta de bóveda [m]. Con ellas se calcula el factor de chapa |
+| `hc`, `h0` | `float` | `5.0`, `0.25` | Datos del fabricante para el factor de chapa [m] |
+
+**Atributo calculado:** `factor_chapa` (1 en celosía o sin cotas).
+
+### `CalculoApoyos`
+
+| Parámetro | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `conductor` | `Conductor` | — | Conductor de la línea |
+| `linea` | `Linea` | — | Datos de la línea |
+| `vanos` | `list[float]` | — | Vano entre cada par de apoyos [m] (n − 1 valores) |
+| `desniveles` | `list[float]` | — | Altura de cada apoyo respecto al anterior [m] (n valores, el 1º = 0) |
+| `tipos` | `list[str]` | — | Tipo de cada apoyo (`TIPOS_APOYO`) |
+| `angulos` | `dict[int, float]` | `{}` | `{nº de apoyo: ángulo [º]}` de los apoyos de ángulo |
+| `tensiones` | `DataFrame \| None` | `None` | Tensiones del enunciado (tramos × hipótesis). `None` → se calculan por cantones |
+| `armados` | `Armado \| dict \| None` | `None` | Uno para todos o `{tipo: Armado}`, con `"resto"` para los demás tipos |
+| `n_conductores` | `int` | `3` | Número de conductores |
+| `rotura` | `bool \| None` | `None` | Forzar (`True`) o quitar (`False`) la 4ª hipótesis. `None` → según el reglamento |
+
+| Método / atributo | Devuelve |
+|---|---|
+| `cantones`, `calculo_vano(i)` | Cantones de la línea y el `calculoMecanico` del vano *i* (0 = vano 1-2) |
+| `tensiones`, `tensiones_calculadas` | Tensión de cada vano en cada hipótesis, y si es calculada (`True`) o del enunciado |
+| `gravivano(numero, hipotesis)`, `eolovano(numero)` | Gravivano (`"viento"` o `"hielo"`) y eolovano del apoyo [m] |
+| `hipotesis_viento(numero)`, `hipotesis_hielo`, `hipotesis_desequilibrio`, `hipotesis_rotura` | Diccionario con V, T, L y Mt de cada hipótesis |
+| `hipotesis_aplicables(numero)` | Hipótesis que se calculan en el apoyo |
+| `esfuerzos(numero)` | Tabla de esfuerzos para elegir el apoyo |
+| `armado(numero)`, `formas` | Armado de un apoyo y forma de cada uno |
+| `esquema(nombre, carpeta, guardar, mostrar)` | Dibuja el perfil, lo guarda en `esquemas/` y lo muestra |
+
 ---
 
 ## Datos de conductores
@@ -309,7 +359,7 @@ E y α no figuran en las tablas del tema. Por defecto se asignan según la compo
 
 Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dato` y `alfa_dato`.
 
-> **Nota sobre la tabla del tema:** en la columna «Total viento-hielo zona C», el viento está calculado sobre el manguito de hielo de la zona B. Se ha copiado tal cual. La clase `calculoMecanico` no usa esa columna: calcula la sobrecarga conjunta con el manguito de la zona que corresponda.
+> **Nota sobre la tabla del tema:** en la columna «Total viento-hielo zona C», el viento está calculado sobre el manguito de hielo de la zona B. Se ha copiado tal cual. La librería no usa esa columna: `Conductor.p_total_hielo_viento` calcula la sobrecarga conjunta con el manguito de la zona que corresponda.
 
 ---
 
@@ -317,6 +367,8 @@ Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dat
 
 - [`docs/modelos_electricos.md`](docs/modelos_electricos.md): ecuaciones de los cuatro modelos y validación.
 - [`docs/calculo_mecanico.md`](docs/calculo_mecanico.md): catenaria, sobrecargas, ecuación de cambio de condiciones, hipótesis del RLAT, algoritmo de la hipótesis dominante y vano a desnivel.
+- [`docs/apoyos.md`](docs/apoyos.md): cantones, gravivano y eolovano, armados, las cuatro hipótesis de cálculo de apoyos, tabla de esfuerzos y esquema.
+- [`revision/`](revision): informe de la revisión de `calculoMecanico` y de los cambios hechos para arreglar sus fallos (PDF).
 
 ## Validación
 
@@ -324,12 +376,14 @@ Son valores típicos de catálogo. Si el enunciado da otros, pásalos con `E_dat
 - **Cálculo mecánico a nivel:** reproduce el ejemplo de clase *«Cálculo mecánico de un vano a nivel»* con diferencias menores de 1 daN, debidas al redondeo del ejemplo.
 - **Cálculo mecánico a desnivel:** reproduce el estado inicial del ejercicio de clase *«Cálculo mecánico de vano desnivelado»*: b = 230,87 m y Tm = 740,66 daN.
 - **Límites EDS y CHS del enunciado:** reproduce la tabla del conductor del ejemplo *«Cálculo mecánico de apoyos de una línea aérea de 3ª categoría»* (SJR005: LA-110, zona C, EDS 8,7 %, CHS 15,9 %) en sus tres cantones, con diferencias menores del 0,6 %. Cada cantón se calcula con su vano de regulación y su mayor desnivel.
+- **Apoyos:** reproduce los 39 esfuerzos y los 7 resúmenes de esfuerzos del ejemplo SJR005, con diferencias menores del 0,5 % (el ejemplo redondea el peso del conductor).
 
 ## Limitaciones
 
-- **Cálculo mecánico:** un único vano o vano de regulación por cálculo, y sin deformación plástica (fluencia) del conductor. La aproximación parabólica es válida para vanos de menos de 500 m. En vanos mayores, la flecha se calcula con la catenaria, pero la ecuación de cambio de condiciones sigue siendo la parabólica.
-- **Vano a desnivel:** la ecuación de cambio de condiciones usa el vano proyectado *a* con la tensión Tm, como en la asignatura. Es una aproximación que pierde precisión en vanos muy desnivelados (≈ 1 % en el término B con un desnivel del 10 %). La catenaria de los vanos de más de 500 m todavía no tiene en cuenta el desnivel.
+- **Cálculo mecánico:** un único vano o vano de regulación por cálculo, y sin deformación plástica (fluencia) del conductor. La aproximación parabólica es válida para vanos de menos de 500 m. En vanos mayores, la flecha se calcula con la catenaria (también con desnivel, sobre el vano real *b*), pero la ecuación de cambio de condiciones sigue siendo la parabólica, como en la asignatura.
+- **Vano a desnivel:** la ecuación de cambio de condiciones usa el vano proyectado *a* con la tensión Tm, como en la asignatura. Es una aproximación que pierde precisión en vanos muy desnivelados (≈ 1 % en el término B con un desnivel del 10 %).
 - **Modelos eléctricos:** línea trifásica equilibrada, con datos conocidos en el extremo de la carga.
+- **Apoyos:** falta la 2ª hipótesis de categoría especial (hielo + viento), y el apoyo no se elige automáticamente de las tablas del fabricante.
 
 ## Tests
 
@@ -341,10 +395,11 @@ pytest
 | Archivo | Qué comprueba |
 |---|---|
 | `tests/test_modelos_electricos.py` | Los cuatro modelos frente a la hoja de cálculo, el comportamiento físico con susceptancia y el carácter de la carga |
-| `tests/test_conductores.py` | Que los CSV cuadran con las fórmulas del tema (detecta números mal copiados) y la clase `Conductor` |
+| `tests/test_conductores.py` | Que los CSV cuadran con las fórmulas del tema (detecta números mal copiados), la clase `Conductor` (búsqueda del nombre, conductores homogéneos, `disponibles()`) y sus sobrecargas |
 | `tests/test_calculo_mecanico.py` | Zona, categoría y coeficiente de seguridad; los límites EDS y CHS del enunciado; los ejemplos 1, 2 y 3 del Tema 9; el ejemplo de clase de vano a nivel; el ejemplo SJR005; que ninguna hipótesis supere su límite; la exportación a Excel; y una **regresión** con cuatro escenarios (zonas A, B y C, categoría especial y vano con catenaria) |
-| `tests/test_apoyos.py` | Datos de la línea de `CalculoApoyos` (tipos, cotas, ángulos), errores al introducirlos mal, cantones y tensiones (calculadas con el SJR005 o del enunciado) y el esquema |
+| `tests/test_apoyos.py` | Datos de la línea de `CalculoApoyos` (tipos, cotas, ángulos), errores al introducirlos mal, cantones y tensiones (calculadas con el SJR005 o del enunciado), los armados, las cuatro hipótesis y los resúmenes de esfuerzos del SJR005, y el esquema |
 | `tests/test_desnivel.py` | Vano a desnivel: que con `desnivel=0` todo sea idéntico al vano a nivel, que el signo no importe, el umbral `DESNIVEL_MINIMO` y los valores del ejercicio de clase |
+| `tests/test_revision.py` | Un test por cada fallo de la revisión de `calculoMecanico` (F1-F12), para que no vuelvan a aparecer |
 
 Los tests de regresión comparan con las tablas de `tests/referencias/`. Si cambias el cálculo **a propósito** y has comprobado que el resultado nuevo es el correcto, regenéralas con:
 
@@ -360,7 +415,9 @@ libreria-alta-tension/
 ├── ejemplos.py                   # ejemplos de uso
 ├── caracteristicas_conductores/  # tablas de conductores (CSV)
 ├── docs/                         # explicación de los cálculos
+├── revision/                     # informes de la revisión de calculoMecanico (LaTeX y PDF)
 ├── tests/                        # tests (pytest)
+├── esquemas/                     # imágenes de esquema() (se crea sola, no se sube)
 ├── pyproject.toml                # configuración de pytest
 ├── requirements.txt
 └── README.md

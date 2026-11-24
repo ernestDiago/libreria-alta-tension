@@ -1,5 +1,7 @@
 """Tests de los CSV de conductores y de la clase Conductor."""
 
+import typing
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -70,6 +72,23 @@ def test_E_y_alfa_del_enunciado_tienen_prioridad():
 def test_todos_los_LA_tienen_E_y_alfa(nombre):
     cable = at.Conductor(nombre)
     assert cable.E > 0 and cable.alfa > 0
+
+
+def test_conductores_disponibles():
+    tabla = at.Conductor.disponibles()   # sin crear ningún conductor
+    assert list(tabla.index) == list(LA.index)
+    assert tabla.loc["LA 56", "Sección [mm²]"] == 54.6
+    assert tabla.loc["LA 180", "Rotura [daN]"] == 6494
+
+
+def test_conductores_disponibles_homogeneos():
+    tabla = at.Conductor.disponibles(str(at.CARPETA_CONDUCTORES / "conductores_AL1.csv"))
+    assert tabla.loc["L 56", "Sección [mm²]"] == 54.6
+
+
+def test_desplegable_del_editor_coincide_con_el_csv():
+    "Si se añade un conductor al CSV, hay que añadirlo también a NombreLA"
+    assert list(typing.get_args(at.NombreLA)) == list(LA.index)
 
 
 def test_conductor_desconocido_da_error_con_la_lista():
